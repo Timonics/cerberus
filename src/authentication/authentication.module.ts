@@ -1,0 +1,72 @@
+import { Module } from '@nestjs/common';
+import { ListSessionsUseCase } from './application/use-cases/list-sessions.use-case';
+import { LoginUseCase } from './application/use-cases/login.use-case';
+import { LogoutUseCase } from './application/use-cases/logout.use-case';
+import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case';
+import { RevokeSessionUseCase } from './application/use-cases/revoke-session.use-case';
+import { PasswordChangedSessionRevoker } from './application/event-handlers/password-changed.handler';
+import { LockoutPolicy } from './domain/aggregates/lockout-policy';
+import { LOGIN_ATTEMPT_REPOSITORY } from './domain/ports/login-attempt.repository.port';
+import { SESSION_REPOSITORY } from './domain/ports/session.repository.port';
+import { AuthController } from './interfaces/http/auth.controller';
+import { PrismaSessionRepository } from './infrastructure/persistence/prisma-session.repository';
+import { RedisLoginAttemptRepository } from './infrastructure/persistence/redis-login-attempt.repository';
+import {
+  REFRESH_TOKEN_GENERATOR,
+  RandomRefreshTokenGenerator,
+} from './infrastructure/security/refresh-token-generator';
+
+/**
+ * Authentication bounded context — Nest wiring.
+ *
+ * Injects use-cases from Identity (VerifySecondFactorUseCase,
+ * UserRepository, CredentialRepository) implicitly via the module graph —
+ * `IdentityModule` is imported before `AuthenticationModule` in
+ * `AppModule`, so the symbols are already in the DI scope by the time
+ * this module's providers are constructed.
+ *
+ * Exports LoginUseCase etc. for the Authorization context (Phase 13)
+ * to call during JWT issuance.
+ */
+@Module({
+  controllers: [AuthController],
+  providers: [
+    // Infrastructure
+    PrismaSessionRepository,
+    RedisLoginAttemptRepository,
+    RandomRefreshTokenGenerator,
+    {
+      provide: SESSION_REPOSITORY,
+      useClass: PrismaSessionRepository,
+    },
+    {
+      provide: LOGIN_ATTEMPT_REPOSITORY,
+      useClass: RedisLoginAttemptRepository,
+    },
+    {
+      provide: REFRESH_TOKEN_GENERATOR,
+      useExisting: RandomRefreshTokenGenerator,
+    },
+    LockoutPolicy,
+
+    // Use-cases
+    LoginUseCase,
+    RefreshSessionUseCase,
+    LogoutUseCase,
+    ListSessionsUseCase,
+    RevokeSessionUseCase,
+
+    // Cross-context event handler — auto-wires via OnModuleInit.
+    PasswordChangedSessionRevoker,
+  ],
+  exports: [
+    LoginUseCase,
+    RefreshSessionUseCase,
+    LogoutUseCase,
+    ListSessionsUseCase,
+    RevokeSessionUseCase,
+    SESSION_REPOSITORY,
+    LOGIN_ATTEMPT_REPOSITORY,
+  ],
+})
+export class AuthenticationModule {}

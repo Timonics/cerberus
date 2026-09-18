@@ -1,0 +1,60 @@
+# =============================================================================
+# Cerberus — local infrastructure
+# =============================================================================
+# Spin up Postgres, Redis, and Mailpit (dev SMTP) for local development.
+#
+#   docker compose up -d
+#   npm run prisma:migrate
+#   npm run start:dev
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cerberus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cerberus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cerberus}
+      POSTGRES_DB: ${POSTGRES_DB:-cerberus}
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+          - postgres-data:/var/lib/postgresql/data
+          - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-cerberus} -d ${POSTGRES_DB:-cerberus}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cerberus-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6384}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Dev SMTP. Web UI at http://localhost:8025 — all messages sent to the
+  # Cerberus service in dev land here and can be inspected via the UI.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: cerberus-mailpit
+    restart: unless-stopped
+    ports:
+      - "1026:1025"
+      - "8026:8025"
+
+volumes:
+  postgres-data:
+  redis-data:
