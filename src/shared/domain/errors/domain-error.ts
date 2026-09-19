@@ -53,6 +53,17 @@ export type DomainErrorCode =
   | 'admin.audit.search.out_of_range'
   | 'admin.audit.search.invalid_range'
   | 'admin.user.mfa_not_enabled'
+  // Apps (per-app integration credentials)
+  | 'app.not_found'
+  | 'app.revoked'
+  | 'app.api_key.not_found'
+  | 'app.api_key.revoked'
+  | 'app.api_key.expired'
+  | 'app.api_key.ttl_non_positive'
+  | 'app.api_key.invalid'
+  | 'app.organization.not_found'
+  | 'app.auth.missing'
+  | 'app.auth.invalid'
   // Generic
   | 'domain.invariant_violation'
   | 'domain.illegal_state';

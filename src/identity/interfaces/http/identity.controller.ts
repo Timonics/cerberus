@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Headers,
   HttpCode,
   HttpStatus,
   Patch,
@@ -14,6 +15,7 @@ import { EnableMfaUseCase } from '../../application/use-cases/enable-mfa.use-cas
 import { RegisterUserUseCase } from '../../application/use-cases/register-user.use-case';
 import { UpdateDisplayNameUseCase } from '../../application/use-cases/update-display-name.use-case';
 import { VerifySecondFactorUseCase } from '../../application/use-cases/verify-second-factor.use-case';
+import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/verify-app-api-key.use-case';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MfaCodeDto } from './dto/mfa-code.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
@@ -52,6 +54,7 @@ import { UserIdHeader } from '../../../authentication/interfaces/http/user-id-he
 export class IdentityController {
   public constructor(
     private readonly registerUserUc: RegisterUserUseCase,
+    private readonly verifyAppApiKeyUc: VerifyAppApiKeyUseCase,
     private readonly changePasswordUc: ChangePasswordUseCase,
     private readonly enableMfaUc: EnableMfaUseCase,
     private readonly confirmMfaUc: ConfirmMfaEnrollmentUseCase,
@@ -62,11 +65,28 @@ export class IdentityController {
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  public async register(@Body() body: RegisterUserDto) {
+  public async register(
+    @Body() body: RegisterUserDto,
+    @Headers('x-cerberus-app-id') appId?: string,
+    @Headers('x-cerberus-app-secret') appSecret?: string,
+  ) {
+    // App-bound org resolution: when the registering app's credentials
+    // are present, look up its `defaultOrgSlug` and pass it to the
+    // use-case. The use-case will use it as path 2 in the org-resolution
+    // chain.
+    let appDefaultOrgSlug: string | null = null;
+    if (appId && appSecret) {
+      const verified = await this.verifyAppApiKeyUc.execute({
+        appId: appId.trim(),
+        plaintextApiKey: appSecret.trim(),
+      });
+      appDefaultOrgSlug = verified?.defaultOrgSlug ?? null;
+    }
     return this.registerUserUc.execute({
       email: body.email,
       password: body.password,
       organizationSlug: body.organizationSlug,
+      appDefaultOrgSlug,
       displayName: body.displayName ?? null,
     });
   }

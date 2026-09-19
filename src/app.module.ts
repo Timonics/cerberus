@@ -12,6 +12,7 @@ import { IdentityModule } from './identity/identity.module';
 import { AuthenticationModule } from './authentication/authentication.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { EngagementModule } from './engagement/engagement.module';
+import { AppsModule } from './apps/apps.module';
 import { GraphqlModule } from './graphql/graphql.module';
 import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
 
@@ -48,6 +49,7 @@ import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
     AuthenticationModule,
     AuthorizationModule,
     EngagementModule,
+    AppsModule,
     GraphqlModule,
     HealthModule,
   ],

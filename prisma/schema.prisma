@@ -374,7 +374,7 @@ enum AdminRole {
 
 /// An admin API key. Generated as a random 32-byte token, hashed via
 /// argon2id, only the hash is persisted. The plaintext is returned to
-/// the operator exactly once at issue time and is never retrievable.
+///   * `notes`        — soft note for the audit trail (e.g. "ci-bot").
 ///
 /// Admin keys are issued via `POST /admin/api-keys` on the separate
 /// admin listener (port 3001 by default). They authenticate
@@ -397,4 +397,62 @@ model AdminApiKey {
   @@index([revokedAt])
   @@index([expiresAt])
   @@map("admin_api_keys")
+}
+
+/// A registered third-party application that integrates with Cerberus.
+///
+/// Apps identify themselves via `X-Cerberus-App-Id` + `X-Cerberous-App-Secret`
+/// headers on register/login/etc. When a register call carries a valid
+/// app credential, the new user is auto-bound to `defaultOrgSlug`
+/// instead of falling through to email-domain matching or auto-creating
+/// a personal org.
+///
+/// Apps are issued an initial `AppApiKey` at registration time;
+/// plaintext is returned ONCE. Operators rotate via
+/// `POST /v1/apps/:id/rotate-key`.
+model App {
+  id             String     @id @default(uuid()) @db.Uuid
+  name           String     @db.VarChar(80)
+  description    String?    @db.VarChar(500)
+  /// Slug of the Organization that users registered through this
+  /// app will be auto-bound to. NULL means "no auto-binding" — the
+  /// register call falls through to email-domain / personal-org
+  /// resolution.
+  defaultOrgSlug String?    @db.VarChar(80)
+  createdAt      DateTime   @default(now())
+  /// Contact email for the registering developer (used in audit
+  /// trail — never shared with users).
+  contactEmail   String     @db.VarChar(255)
+  revokedAt      DateTime?
+  notes          String?    @db.VarChar(500)
+
+  /// Back-relation to `AppApiKey` rows owned by this app.
+  apiKeys AppApiKey[]
+
+  @@index([defaultOrgSlug])
+  @@index([revokedAt])
+  @@map("apps")
+}
+
+/// An API key for a registered App. Same shape as AdminApiKey but
+/// bound to an `App` rather than to an admin operator.
+///
+/// Issued at app registration and rotated via
+/// `POST /v1/apps/:id/rotate-key`.
+model AppApiKey {
+  id         String    @id @default(uuid()) @db.Uuid
+  appId      String    @db.Uuid
+  keyHash    String    @db.VarChar(255)
+  name       String    @db.VarChar(80)
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  app App @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([keyHash])
+  @@index([revokedAt])
+  @@map("app_api_keys")
 }

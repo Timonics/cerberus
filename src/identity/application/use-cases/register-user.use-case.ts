@@ -13,50 +13,61 @@ import {
 } from '../../../shared/domain';
 import { Email } from '../../../shared/domain/value-objects/email';
 import { Password } from '../../../shared/domain/value-objects/password';
-import {
-  PASSWORD_HASHER,
-  PasswordHash,
-  PasswordHasher,
-} from '../../../shared/domain/value-objects/password-hash';
+import { PasswordHash } from '../../../shared/domain/value-objects/password-hash';
+import { UserId } from '../../domain/value-objects/user-id';
+import { OrgSlug } from '../../domain/value-objects/org-slug';
+import { OrgId } from '../../domain/value-objects/org-id';
+import { Role } from '../../domain/value-objects/role';
+import { User } from '../../domain/aggregates/user';
+import { Organization } from '../../domain/aggregates/organization';
 import { Credential } from '../../domain/aggregates/credential';
 import { Membership } from '../../domain/aggregates/membership';
-import { Organization } from '../../domain/aggregates/organization';
-import { User } from '../../domain/aggregates/user';
-import { OrgId } from '../../domain/value-objects/org-id';
-import { OrgSlug } from '../../domain/value-objects/org-slug';
-import { Role } from '../../domain/value-objects/role';
-import { UserId } from '../../domain/value-objects/user-id';
+import {
+  PasswordHasher,
+  PASSWORD_HASHER,
+} from '../../../shared/domain/value-objects/password-hash';
+import {
+  USER_REPOSITORY,
+  UserRepository,
+} from '../../domain/ports/user.repository.port';
 import {
   CREDENTIAL_REPOSITORY,
   CredentialRepository,
 } from '../../domain/ports/credential.repository.port';
 import {
-  MEMBERSHIP_REPOSITORY,
-  MembershipRepository,
-} from '../../domain/ports/membership.repository.port';
+  ORGANIZATION_REPOSITORY,
+  OrganizationRepository,
+} from '../../domain/ports/organization.repository.port';
 import {
   ORGANIZATION_DOMAIN_REPOSITORY,
   OrganizationDomainRepository,
 } from '../../domain/ports/organization-domain.repository.port';
 import {
-  ORGANIZATION_REPOSITORY,
-  OrganizationRepository,
-} from '../../domain/ports/organization.repository.port';
-import {
-  USER_REPOSITORY,
-  UserRepository,
-} from '../../domain/ports/user.repository.port';
+  MEMBERSHIP_REPOSITORY,
+  MembershipRepository,
+} from '../../domain/ports/membership.repository.port';
 
 export interface RegisterUserInput {
   email: string;
   password: string;
   /**
    * Optional. If provided, the user joins the org with this slug.
-   * If omitted, the auth service derives the org from the email domain
-   * (via `OrganizationDomain`), or creates a personal org if no domain
-   * is registered.
+   * If omitted, the auth service derives the org from the registered
+   * app's `defaultOrgSlug`, then from the email domain (via
+   * `OrganizationDomain`), and finally creates a personal org.
    */
   organizationSlug?: string;
+  /**
+   * Optional. If present (validated upstream by the apps auth flow),
+   * this app's `defaultOrgSlug` becomes the org-binding source —
+   * unless an explicit `organizationSlug` is also provided, in which
+   * case the explicit slug wins.
+   *
+   * V1: this is just an organizational hint; the actual auth happens
+   * at the controller layer. The use-case doesn't re-verify the
+   * app's API key — that's the guard's job.
+   */
+  appDefaultOrgSlug?: string | null;
   displayName?: string | null;
 }
 
@@ -76,10 +87,13 @@ export interface RegisterUserResult {
  *
  *   1. If `organizationSlug` is provided → look up the org by slug.
  *      Throws if not found.
- *   2. Else, extract the email domain and look up `OrganizationDomain`.
+ *   2. Else, if the registering app's `defaultOrgSlug` is present,
+ *      look up the org by that slug. Falls through if the slug is
+ *      missing the org row.
+ *   3. Else, extract the email domain and look up `OrganizationDomain`.
  *      If found, join that org. If not found:
- *      3. Auto-create a personal org with `slug = personal-<short-uuid>`,
- *         `name = <email-local-part>'s Workspace`.
+ *   4. Auto-create a personal org with `slug = personal-<short-uuid>`,
+ *      `name = <email-local-part>'s Workspace`.
  *
  * The first user to register for a given org gets the `OWNER` role.
  * Subsequent users get `MEMBER`. For V1 (single-org-per-user), only the
@@ -121,6 +135,10 @@ export class RegisterUserUseCase {
     const explicitSlug = input.organizationSlug
       ? OrgSlug.create(input.organizationSlug)
       : null;
+    const appDefaultOrgSlug =
+      typeof input.appDefaultOrgSlug === 'string'
+        ? input.appDefaultOrgSlug.trim() || null
+        : null;
     const displayName = input.displayName?.trim() || null;
 
     // Hash the password outside the transaction (argon2 is ~50ms CPU).
@@ -145,7 +163,12 @@ export class RegisterUserUseCase {
       }
 
       // Resolve the organization.
-      const resolved = await this.resolveOrganization(tx, email, explicitSlug);
+      const resolved = await this.resolveOrganization(
+        tx,
+        email,
+        explicitSlug,
+        appDefaultOrgSlug,
+      );
       const { organization, autoCreatedOrg } = resolved;
 
       // Create User.
@@ -159,20 +182,6 @@ export class RegisterUserUseCase {
       });
       await this.userRepo.save(tx, user);
 
-      // Create Membership. First user of an org is OWNER; subsequent
-      // users (or users joining an existing org) are MEMBER.
-      const isFirstUser = await this.isFirstUserInOrg(tx, organization.id);
-      const role = isFirstUser ? Role.create('OWNER') : Role.create('MEMBER');
-
-      const membership = Membership.create({
-        id: this.idGenerator.generate(),
-        userId: user.id,
-        organizationId: organization.id,
-        role,
-        clock: this.clock,
-      });
-      await this.membershipRepo.save(tx, membership);
-
       // Create Credential.
       const credential = Credential.create({
         clock: this.clock,
@@ -181,9 +190,23 @@ export class RegisterUserUseCase {
       });
       await this.credentialRepo.save(tx, credential);
 
+      // Create Membership (OWNER if first, else MEMBER).
+      const role = (await this.isFirstUserInOrg(tx, organization.id))
+        ? Role.create('OWNER')
+        : Role.create('MEMBER');
+      const membership = Membership.create({
+        id: this.idGenerator.generate(),
+        clock: this.clock,
+        userId: user.id,
+        organizationId: organization.id,
+        role,
+      });
+      await this.membershipRepo.save(tx, membership);
+
       return { user, organization, autoCreatedOrg };
     });
 
+    // Publish post-commit events. Drains all pending domain events.
     await this.eventBus.publishAll(user.pullDomainEvents());
 
     return {
@@ -198,6 +221,12 @@ export class RegisterUserUseCase {
   /**
    * Resolve which organization the new user should join.
    *
+   * Path order (priority):
+   *   1. Explicit `organizationSlug` from the caller.
+   *   2. The registering app's `defaultOrgSlug` (if any).
+   *   3. Email-domain lookup against `OrganizationDomain`.
+   *   4. Auto-create a personal org.
+   *
    * Returns the existing org (looked up by slug or domain) or a freshly
    * created personal org. The `autoCreatedOrg` flag in the return value
    * tells the caller which path was taken.
@@ -206,6 +235,7 @@ export class RegisterUserUseCase {
     tx: Tx,
     email: Email,
     explicitSlug: OrgSlug | null,
+    appDefaultOrgSlug: string | null,
   ): Promise<{ organization: Organization; autoCreatedOrg: boolean }> {
     // Path 1: explicit slug provided.
     if (explicitSlug) {
@@ -220,7 +250,21 @@ export class RegisterUserUseCase {
       return { organization: org, autoCreatedOrg: false };
     }
 
-    // Path 2: extract email domain and look up.
+    // Path 2: app-bound org slug. The guard upstream already verified
+    // the app's API key — by this point we trust the slug, but the
+    // org still has to actually exist.
+    if (appDefaultOrgSlug && appDefaultOrgSlug.length > 0) {
+      const appOrgSlug = OrgSlug.create(appDefaultOrgSlug);
+      const org = await this.organizationRepo.findBySlug(tx, appOrgSlug);
+      if (org) {
+        return { organization: org, autoCreatedOrg: false };
+      }
+      // App references a missing org — fall through to domain match.
+      // Should not happen in practice (the apps table is admin-managed),
+      // but we degrade gracefully.
+    }
+
+    // Path 3: extract email domain and look up.
     const domain = email.value.split('@')[1]?.toLowerCase();
     if (domain) {
       const match = await this.organizationDomainRepo.findByDomain(tx, domain);
@@ -238,7 +282,7 @@ export class RegisterUserUseCase {
       }
     }
 
-    // Path 3: auto-create a personal org.
+    // Path 4: auto-create a personal org.
     const personalOrg = await this.createPersonalOrg(tx, email.value);
     return { organization: personalOrg, autoCreatedOrg: true };
   }

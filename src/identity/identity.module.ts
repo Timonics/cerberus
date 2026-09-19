@@ -24,6 +24,7 @@ import { MFA_SECRET_REPOSITORY } from './domain/ports/mfa-secret.repository.port
 import { ORGANIZATION_DOMAIN_REPOSITORY } from './domain/ports/organization-domain.repository.port';
 import { ORGANIZATION_REPOSITORY } from './domain/ports/organization.repository.port';
 import { USER_REPOSITORY } from './domain/ports/user.repository.port';
+import { AppsModule } from '../apps/apps.module';
 
 /**
  * Identity bounded context — Nest wiring.
@@ -31,9 +32,17 @@ import { USER_REPOSITORY } from './domain/ports/user.repository.port';
  * Marked `@Global()` so the repository + hasher ports are visible to
  * other bounded contexts (Authentication needs them). The use-case
  * exports remain explicit.
+ *
+ * Imports `AppsModule` so the register controller can call
+ * `VerifyAppApiKeyUseCase` for app-bound org resolution. Even though
+ * `AppsModule` is itself `@Global()`, an explicit import here makes
+ * the dependency visible to the IdentityController constructor scan
+ * (some Nest versions don't auto-propagate `@Global()` providers to
+ * controllers in modules that don't transitively import the global).
  */
 @Global()
 @Module({
+  imports: [AppsModule],
   controllers: [IdentityController],
   providers: [
     // Infrastructure

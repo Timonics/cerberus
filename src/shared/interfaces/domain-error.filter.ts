@@ -92,9 +92,17 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'admin.api_key.revoked':
       case 'admin.api_key.expired':
       case 'admin.api_key.not_found':
+      case 'app.auth.missing':
+      case 'app.auth.invalid':
+      case 'app.not_found':
+      case 'app.api_key.not_found':
+      case 'app.api_key.revoked':
+      case 'app.api_key.expired':
+      case 'app.organization.not_found':
         return HttpStatus.UNAUTHORIZED;
 
       case 'admin.ip_not_allowed':
+      case 'app.revoked':
         return HttpStatus.FORBIDDEN;
 
       case 'admin.audit.search.too_broad':
