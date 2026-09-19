@@ -361,3 +361,40 @@ enum RevokeReason {
 
   @@map("revoke_reason")
 }
+
+/// Role of an admin operator within the Administration context.
+/// V1 only ships `ADMIN`. `SUPER_ADMIN` (V1.5) can rotate admin keys,
+/// revoke other admins' keys, and read the full audit stream.
+enum AdminRole {
+  ADMIN
+  SUPER_ADMIN
+
+  @@map("admin_role")
+}
+
+/// An admin API key. Generated as a random 32-byte token, hashed via
+/// argon2id, only the hash is persisted. The plaintext is returned to
+/// the operator exactly once at issue time and is never retrievable.
+///
+/// Admin keys are issued via `POST /admin/api-keys` on the separate
+/// admin listener (port 3001 by default). They authenticate
+/// `Authorization: Bearer *** headers on admin endpoints. Rate
+/// limiting and per-key lastUsedAt tracking are done in the repository.
+model AdminApiKey {
+  id           String     @id @default(uuid()) @db.Uuid
+  name         String     @db.VarChar(80)
+  keyHash      String     @db.VarChar(255)
+  role         AdminRole  @default(ADMIN)
+  createdAt    DateTime   @default(now())
+  createdBy    String     @db.VarChar(120)
+  lastUsedAt   DateTime?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  /// Soft note for the audit trail — e.g. "on-call laptop" or "ci-bot".
+  notes        String?    @db.VarChar(255)
+
+  @@index([keyHash])
+  @@index([revokedAt])
+  @@index([expiresAt])
+  @@map("admin_api_keys")
+}

@@ -1,0 +1,84 @@
+# Common types and enums shared across the Cerberus GraphQL schema.
+#
+# These objects describe stable domain shapes that other types reference.
+# They mirror the underlying domain aggregates in cerberus but are
+# intentionally simpler - only what consumers need.
+
+"""
+Stable role a user holds within an organization.
+
+OWNER and ADMIN have the same effective permissions in V1 (they're
+both `org:admin` scope on the access token). The distinction exists
+because future billing / governance features want to know who's the
+original creator vs. someone added later.
+"""
+enum Role {
+  """
+  The user who created the organization. Has full administrative
+  authority over it. Every organization has exactly one OWNER in V1.
+  """
+  OWNER
+
+  """
+  Administrative user added by the OWNER. Same effective permissions
+  as OWNER today; can be revoked by OWNER.
+  """
+  ADMIN
+
+  """
+  Standard member. Can read and modify their own data; cannot manage
+  other users.
+  """
+  MEMBER
+
+  """
+  Read-only user. Useful for auditors, observers, integrations.
+  """
+  VIEWER
+}
+
+"""
+Stable OAuth2 scope strings.
+
+Scopes are space-separated in access tokens. The set a token carries
+is the union of scopes the user's role grants AND any subset
+explicitly requested by the caller. See `Identity.me` for the current
+scope breakdown.
+"""
+enum Scope {
+  """Read the authenticated user's profile, organization, sessions, audit log."""
+  AUTH_READ
+
+  """Modify the authenticated user's profile, password, MFA, display name."""
+  AUTH_WRITE
+
+  """Manage organization settings, members, invitations. Requires OWNER or ADMIN."""
+  ORG_ADMIN
+}
+
+"""
+Stable error codes returned in `extensions.code` on every error response
+(REST AND GraphQL). Clients should switch on these, not on `message`.
+"""
+enum ErrorCode {
+  """Generic input validation failure. Inspect `message` for details."""
+  INPUT_INVALID
+
+  """Missing or invalid bearer token."""
+  UNAUTHENTICATED
+
+  """Token valid but lacks the scope/role needed for this operation."""
+  FORBIDDEN
+
+  """The referenced resource does not exist."""
+  NOT_FOUND
+
+  """The request is well-formed but conflicts with current state (e.g. duplicate email)."""
+  CONFLICT
+
+  """Server-side invariant violated (e.g. token TTL is non-positive)."""
+  INVARIANT_VIOLATION
+
+  """Internal server error. Retriable. Inspect server logs for details."""
+  INTERNAL
+}

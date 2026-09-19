@@ -11,6 +11,8 @@ import { HealthModule } from './health/health.module';
 import { IdentityModule } from './identity/identity.module';
 import { AuthenticationModule } from './authentication/authentication.module';
 import { AuthorizationModule } from './authorization/authorization.module';
+import { EngagementModule } from './engagement/engagement.module';
+import { GraphqlModule } from './graphql/graphql.module';
 import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
 
 /**
@@ -45,6 +47,8 @@ import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
     IdentityModule,
     AuthenticationModule,
     AuthorizationModule,
+    EngagementModule,
+    GraphqlModule,
     HealthModule,
   ],
   providers: [

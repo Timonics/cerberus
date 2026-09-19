@@ -1,0 +1,165 @@
+# Engagement bounded context - GraphQL schema.
+#
+# Mirrors the REST `EngagementController` exposed at `/v1/engagement/*`.
+# Includes email verification, password reset, and the user's own audit
+# log. Admin-only audit-log views land in Phase 15 (Administration).
+
+"""
+A single audit-log entry. Append-only - there is no `updatedAt`.
+
+`payload` is a free-form JSON object whose shape depends on
+`eventType`. The schema intentionally doesn't enumerate variants;
+clients that care about specific event shapes can switch on
+`eventType` and apply their own type narrowing.
+"""
+type AuditLogEntry {
+  """UUID v4."""
+  id: ID!
+
+  """
+  Stable event code. One of:
+    * identity.user.registered
+    * identity.email.verified
+    * identity.password.changed
+    * identity.mfa.enabled
+    * identity.mfa.disabled
+    * identity.account.locked
+    * authentication.login.succeeded
+    * authentication.login.failed
+    * authentication.session.revoked
+    * authentication.account.locked
+    * engagement.email_verification.requested
+    * engagement.email_verification.completed
+    * engagement.password_reset.requested
+    * engagement.password_reset.completed
+  """
+  eventType: String!
+
+  """ISO 8601 timestamp."""
+  createdAt: String!
+
+  """Request IP at the time of the event. May be null for system-originated events."""
+  ipAddress: String
+
+  """Request User-Agent at the time of the event. May be null."""
+  userAgent: String
+
+  """Event-type-specific payload. Shape varies by `eventType`."""
+  payload: JSON
+}
+
+"""
+A page of audit-log entries. Returned by `Engagement.myAuditLog`.
+"""
+type AuditLogPage {
+  """Audit-log entries in this page, most recent first."""
+  entries: [AuditLogEntry!]!
+
+  """Number of entries in this page (not the user's total history)."""
+  total: Int!
+
+  """IP address of the requesting client at query time, for cross-checking against entries' own `ipAddress` field."""
+  ipAddress: String
+
+  """User-Agent of the requesting client at query time."""
+  userAgent: String
+}
+
+"""
+Scalar for arbitrary JSON. GraphQL doesn't have a built-in JSON type,
+but `JSON` is widely supported by client libraries (Apollo, urql,
+Relay). The schema accepts any JSON value and returns any JSON value.
+"""
+scalar JSON
+
+"""
+Input for `Engagement.requestPasswordReset`. Always returns true
+regardless of whether the email is registered — the server never
+reveals account existence to an attacker.
+"""
+input RequestPasswordResetInput {
+  """Email address of the user requesting the reset."""
+  email: String!
+}
+
+"""
+Input for `Engagement.confirmPasswordReset`. The user received the
+`token` in an email; `newPassword` is the value they want to set.
+"""
+input ConfirmPasswordResetInput {
+  """
+  Plaintext token from the email link. Single-use. Expires after the
+  configured TTL (default: 1 hour).
+  """
+  token: String!
+
+  """The new password. 12–128 characters."""
+  newPassword: String!
+}
+
+"""
+Input for `Engagement.confirmEmailVerification`.
+"""
+input ConfirmEmailVerificationInput {
+  """
+  Plaintext token from the verification email. Single-use. Expires
+  after the configured TTL (default: 24 hours).
+  """
+  token: String!
+}
+
+"""
+The Engagement root query type.
+"""
+type Query {
+  """
+  The authenticated user's own audit log, most recent first.
+
+  Limit is bounded server-side to 1–500 entries. Default: 100. This
+  endpoint only returns the calling user's events — cross-user audit
+  queries require admin scope (Phase 15).
+  """
+  myAuditLog(limit: Int = 100): [AuditLogEntry!]!
+}
+
+"""
+The Engagement root mutation type.
+"""
+type Mutation {
+  """
+  Request a fresh email-verification token for the calling user.
+  Always returns true.
+
+  If the user already has an un-consumed token, it is revoked and a
+  new one is issued. The plaintext token is sent via email through
+  the configured mail sender — the HTTP/GraphQL response does NOT
+  include it.
+  """
+  requestEmailVerification: Boolean!
+
+  """
+  Redeem an email-verification token. Sets `User.emailVerifiedAt`.
+
+  Token is single-use; replay returns an error. Tokens also expire
+  after 24 hours.
+  """
+  confirmEmailVerification(input: ConfirmEmailVerificationInput!): Boolean!
+
+  """
+  Request a password-reset token. Open to unauthenticated callers.
+
+  Always returns true, even when the email is not registered — this
+  prevents account-existence enumeration. If the email IS registered,
+  a reset token is emailed (plaintext is NOT returned in the response).
+  """
+  requestPasswordReset(input: RequestPasswordResetInput!): Boolean!
+
+  """
+  Redeem a password-reset token and set a new password.
+
+  Token is single-use; replay returns an error. Tokens also expire
+  after 1 hour. On success, the auth context revokes all the user's
+  live sessions.
+  """
+  confirmPasswordReset(input: ConfirmPasswordResetInput!): Boolean!
+}

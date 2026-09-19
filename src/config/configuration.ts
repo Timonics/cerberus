@@ -67,6 +67,13 @@ export interface AppConfig {
     /** Max requests per window per key. */
     max: number;
   };
+
+  graphql: {
+    /** Enable GraphQL introspection (SDL schema). */
+    introspectionEnabled: boolean;
+    /** Enable the GraphQL Playground (dev only). */
+    playgroundEnabled: boolean;
+  };
 }
 
 /**
@@ -132,6 +139,13 @@ export const configuration = (): AppConfig => {
     rateLimit: {
       ttl: Number(process.env.RATE_LIMIT_TTL ?? 60),
       max: Number(process.env.RATE_LIMIT_MAX ?? 60),
+    },
+
+    graphql: {
+      introspectionEnabled:
+        (process.env.GRAPHQL_INTROSPECTION ?? 'true').toLowerCase() === 'true',
+      playgroundEnabled:
+        (process.env.GRAPHQL_PLAYGROUND ?? 'true').toLowerCase() === 'true',
     },
   };
 };

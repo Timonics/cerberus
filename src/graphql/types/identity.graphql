@@ -1,0 +1,316 @@
+# Identity bounded context - GraphQL schema.
+#
+# Mirrors the REST `IdentityController` exposed at `/v1/identity/*`. Use
+# this schema when integrating as a first-party client (web/mobile app,
+# server-side service). For OAuth2 token issuance + resource-server
+# flows, use the REST endpoints under `/v1/oauth/*` (they're RFC-mandated
+# shapes and don't translate cleanly to GraphQL).
+
+"""
+A registered Cerberus user. The shape here is the public-facing one
+— credentials, MFA secrets, recovery codes are NEVER returned.
+
+`emailVerifiedAt` is null until the user confirms their email via
+`Engagement.confirmEmailVerification`.
+"""
+type User {
+  """The user's unique identifier. UUID v4."""
+  id: ID!
+
+  """Email address. Lowercase. Unique across all organizations in V1."""
+  email: String!
+
+  """
+  Optional human-friendly name. Used in welcome emails, audit-log
+  entries, and any UI rendering the user's identity.
+  """
+  displayName: String
+
+  """
+  ISO 8601 timestamp when the email was verified. Null if the user
+  has not yet verified.
+  """
+  emailVerifiedAt: String
+
+  """ISO 8601 timestamp the user was created."""
+  createdAt: String!
+
+  """True if the user has confirmed TOTP MFA via `Identity.confirmMfaEnrollment`."""
+  mfaEnabled: Boolean!
+
+  """
+  The user's role within their organization. Returns OWNER for the
+  user who registered the org (the only person who can manage the
+  org today).
+  """
+  role: Role!
+
+  """The organization this user belongs to (V1: every user is in exactly one)."""
+  organization: Organization!
+}
+
+"""
+An organization — a workspace that groups users together.
+
+V1: every user is in exactly one organization. A user joining multiple
+orgs is V1.5. V1 also enforces single-org-per-user at the registration
+flow level: the `Identity.register` mutation auto-creates a personal
+organization unless an existing organization slug is supplied.
+"""
+type Organization {
+  """UUID v4."""
+  id: ID!
+
+  """Lowercase, URL-safe identifier. Unique. Used in the URL `/{slug}`."""
+  slug: String!
+
+  """
+  Human-readable name. May contain spaces and Unicode. Max 200 chars.
+  Derived from the user's email local-part at registration if not
+  explicitly supplied.
+  """
+  name: String!
+
+  """ISO 8601 timestamp."""
+  createdAt: String!
+}
+
+"""
+Input to `Identity.register`. Required fields are `email` and `password`.
+Everything else is optional and triggers the auto-create-personal-org
+flow when omitted.
+"""
+input RegisterInput {
+  """Email address. Will be lowercased server-side."""
+  email: String!
+
+  """
+  User's password. 12–128 characters. Argon2id-hashed server-side with
+  OWASP 2024 parameters (m=65536, t=3, p=4).
+  """
+  password: String!
+
+  """
+  Optional. If supplied, the new user joins the organization with this
+  slug. If omitted, the server looks up an organization via the email
+  domain (matched against `OrganizationDomain` table) and finally
+  falls back to creating a personal org.
+  """
+  organizationSlug: String
+
+  """Optional. Default display name. Empty string is rejected; omit the field entirely to skip."""
+  displayName: String
+}
+
+"""
+Result of `Identity.register`. Returns scalar IDs and the slug directly
+so callers don't need to make a follow-up `getUser` query to assemble a
+display.
+"""
+type RegisterPayload {
+  """The new user's UUID."""
+  userId: ID!
+
+  """The user's email address."""
+  email: String!
+
+  """The new (or existing, when joining by slug) organization."""
+  organizationId: ID!
+
+  """The organization's slug. URL-safe. Unique across all orgs in V1."""
+  organizationSlug: String!
+
+  """
+  True when no explicit organizationSlug was supplied and no domain
+  matched, so a personal workspace was auto-created.
+  """
+  autoCreatedOrg: Boolean!
+}
+
+"""
+Input for changing the authenticated user's password.
+"""
+input ChangePasswordInput {
+  """The user's current password. Verified before the change is applied."""
+  currentPassword: String!
+
+  """The new password. 12–128 characters."""
+  newPassword: String!
+}
+
+"""
+Input for `Identity.updateDisplayName`.
+
+Either provide `displayName` to set it (non-null string) or set
+`clearDisplayName: true` to remove it. At least one must be present.
+"""
+input UpdateDisplayNameInput {
+  """New display name. 1–120 characters when present."""
+  displayName: String
+
+  """Set to true to remove the user's display name entirely."""
+  clearDisplayName: Boolean
+}
+
+"""
+Input for `Identity.confirmMfaEnrollment`. The 6-digit TOTP code from
+the user's authenticator app (RFC 6238).
+"""
+input MfaCodeInput {
+  """6-digit code from Google Authenticator / 1Password / Authy / etc."""
+  code: String!
+}
+
+"""
+Result of `Identity.enableMfa`. The plaintext secret and recovery codes
+are returned EXACTLY ONCE — the caller MUST display them to the user
+immediately. After this mutation resolves, the server does not retain
+the plaintext secret.
+"""
+type MfaEnrollment {
+  """
+  Base32-encoded TOTP secret. Scannable into the authenticator app as
+  an `otpauth://totp/...` URL — see `otpauthUrl`.
+  """
+  secret: String!
+
+  """Otpauth URI. Most authenticator apps accept this directly via QR code."""
+  otpauthUrl: String!
+
+  """
+  Ten 10-character recovery codes, generated via Crockford base32.
+  Each is single-use. The user MUST store these somewhere safe — once
+  lost, they're gone.
+  """
+  recoveryCodes: [String!]!
+}
+
+"""
+Input for `Identity.verifyMfa`. Accepts either a TOTP code or a
+10-character recovery code (used to bypass TOTP when the device is
+unavailable).
+"""
+input VerifyMfaInput {
+  """Either a 6-digit TOTP code OR a 10-character recovery code."""
+  code: String!
+}
+
+"""
+Result of `Identity.verifyMfa`. Indicates which form of code matched.
+"""
+type VerifyMfaResult {
+  """
+  The matching code's type. Clients should render different UX paths
+  based on this — a TOTP match is a routine login, a recovery-code
+  match means the user should reset their authenticator device ASAP.
+  """
+  matched: MfaMatchType!
+}
+
+"""
+Which form of code matched in `Identity.verifyMfa`.
+"""
+enum MfaMatchType {
+  """A 6-digit TOTP code matched."""
+  TOTP
+
+  """A 10-character recovery code matched (and was consumed)."""
+  RECOVERY
+}
+
+"""
+The Identity root query type. All reads here require a valid bearer
+token EXCEPT `Identity.health` which is the unauthenticated liveness
+probe (also available at `GET /health`).
+"""
+type Query {
+  """
+  The currently-authenticated user, including their organization and
+  MFA status. This is the canonical "who am I" query.
+  """
+  me: User!
+
+  """
+  Look up any user by ID. Requires `org:admin` scope (OWNER or ADMIN
+  role). Returns null if the user does not exist OR the caller is not
+  authorized.
+  """
+  getUser(id: ID!): User
+
+  """
+  Unauthenticated liveness probe. Returns true. Use this for load
+  balancer health checks.
+  """
+  health: Boolean!
+}
+
+"""
+The Identity root mutation type.
+"""
+type Mutation {
+  """
+  Register a new user account.
+
+  Open to unauthenticated callers. Rate-limited at the network layer
+  (Phase 15 adds application-layer throttling).
+
+  Returns the new user + their organization. If `organizationSlug`
+  was supplied, the user joins that organization. Otherwise the server
+  attempts an email-domain lookup and falls back to creating a personal
+  org.
+  """
+  register(input: RegisterInput!): RegisterPayload!
+
+  """
+  Change the authenticated user's password.
+
+  Requires a valid bearer token. The user must re-authenticate
+  afterward — this emits `identity.password.changed` and the auth
+  context revokes all the user's sessions in response.
+  """
+  changePassword(input: ChangePasswordInput!): Boolean!
+
+  """
+  Update the authenticated user's display name.
+
+  To clear, pass `clearDisplayName: true`. To set, pass `displayName`.
+  """
+  updateDisplayName(input: UpdateDisplayNameInput!): User!
+
+  """
+  Begin the MFA enrollment flow.
+
+  Returns the TOTP secret and ten recovery codes. The secret and
+  recovery codes are returned EXACTLY ONCE; they are NOT retrievable
+  afterward. The user MUST confirm enrollment by submitting a valid
+  TOTP code via `Identity.confirmMfaEnrollment`.
+  """
+  enableMfa: MfaEnrollment!
+
+  """
+  Confirm MFA enrollment with a 6-digit TOTP code from the user's
+  authenticator app.
+
+  Flips the MFA secret from `pending` to `confirmed`. Idempotent on
+  already-confirmed secrets (returns true with no change).
+  """
+  confirmMfaEnrollment(input: MfaCodeInput!): Boolean!
+
+  """
+  Disable MFA entirely. Requires a valid TOTP code to prevent
+  unauthorized disabling (e.g. by a thief who briefly gains access
+  to a logged-in session).
+
+  Deletes the MFA secret AND all recovery codes. The user can re-
+  enable via `Identity.enableMfa` later.
+  """
+  disableMfa(input: MfaCodeInput!): Boolean!
+
+  """
+  Verify a second factor (TOTP or recovery code).
+
+  Used by resource servers that need to confirm a user has their MFA
+  device before performing a sensitive operation.
+  """
+  verifyMfa(input: VerifyMfaInput!): VerifyMfaResult!
+}

@@ -1,0 +1,130 @@
+# Authorization bounded context - GraphQL schema.
+#
+# The OAuth2 protocol endpoints (`/v1/oauth/token`, `/v1/oauth/introspect`,
+# `/v1/oauth/revoke`) are NOT exposed here - they're RFC 6749/7662/7009
+# REST endpoints with fixed request/response shapes that don't translate
+# cleanly to GraphQL.
+#
+# What IS exposed here is the JWT verification query (used by resource
+# servers to validate access tokens they receive) and the JWKS read
+# (used by resource servers to fetch the public verification keys).
+#
+# Resource servers integrating with cerberus should:
+#   1. Fetch JWKS from REST `GET /.well-known/jwks.json` ONCE at startup
+#      (or use `Authorization.jwks` GraphQL query).
+#   2. Verify inbound access tokens locally using the cached JWKS via
+#      `Authorization.verifyAccessToken` GraphQL query (which delegates
+#      to the same code path as REST `POST /v1/oauth/introspect`).
+
+"""
+A single JWK (JSON Web Key) - RFC 7517.
+
+Only public parameters are included. Private fields (`d`, `p`, `q`,
+`dp`, `dq`, `qi`) are never returned.
+"""
+type JsonWebKey {
+  """Key type. Always `RSA` in V1."""
+  kty: String!
+
+  """Algorithm. Always `RS256` in V1."""
+  alg: String!
+
+  """Use. Always `sig` (signature verification)."""
+  use: String!
+
+  """Key ID. Stable identifier used in the JWT `kid` header."""
+  kid: String!
+
+  """Modulus (base64url-encoded)."""
+  n: String!
+
+  """Exponent (base64url-encoded)."""
+  e: String!
+}
+
+"""
+The JWKS document (RFC 7517 §5).
+"""
+type JwksDocument {
+  """List of public keys currently accepting verifications."""
+  keys: [JsonWebKey!]!
+}
+
+"""
+The verified claims of a JWT access token. Returned by
+`Authorization.verifyAccessToken`.
+
+Mirrors the JWT payload: `sub`, `org`, `role`, `scope`, `jti`, `iat`,
+`exp`, `iss`, `aud`. The structure here flattens standard claims to
+top-level fields for ergonomic client access.
+"""
+type AccessTokenClaims {
+  """
+  Subject — the user's UUID. Use this to load the user via
+  `Identity.getUser(id: ...)`.
+  """
+  sub: String!
+
+  """Organization ID. Null for personal-org users with no organization context."""
+  org: String
+
+  """User's role within the organization. Null if no organization."""
+  role: Role
+
+  """Space-separated scopes. Use the `Scope` enum to parse."""
+  scope: String!
+
+  """JWT ID. Unique per token. Used for audit-log correlation."""
+  jti: String!
+
+  """Issued-at, epoch seconds."""
+  iat: Float!
+
+  """Expiration, epoch seconds."""
+  exp: Float!
+
+  """Issuer. Always `cerberus` in V1."""
+  iss: String!
+
+  """Audience. Defaults to `cerberus-clients` in V1."""
+  aud: String!
+}
+
+"""
+Input to `Authorization.verifyAccessToken`. Just the JWT string.
+"""
+input VerifyAccessTokenInput {
+  """Compact JWT (RFC 7519 §7)."""
+  token: String!
+}
+
+"""
+The Authorization root query type.
+"""
+type Query {
+  """
+  The JWKS document with all currently-verifying public keys.
+
+  Resource servers should fetch this on startup and cache it. The
+  TTL on cached keys should respect the JWT `kid` rotation cycle
+  (Phase 15 adds a periodic refresh; V1 is manual refresh).
+  """
+  jwks: JwksDocument!
+
+  """
+  Verify an access token and return its claims.
+
+  Throws `UNAUTHENTICATED` if the token is malformed, expired,
+  signed with an unknown key, or has the wrong issuer/audience.
+  Resource servers should prefer local JWT verification against the
+  cached JWKS for hot-path validation; this query is for ad-hoc
+  introspection of tokens they don't recognize.
+  """
+  verifyAccessToken(input: VerifyAccessTokenInput!): AccessTokenClaims!
+}
+
+"""
+The Authorization root mutation type. V1 ships no mutations here —
+the OAuth2 token endpoint lives in REST.
+"""
+type Mutation

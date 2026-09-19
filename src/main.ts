@@ -1,83 +1,77 @@
 import 'reflect-metadata';
-import { RequestMethod, ValidationPipe } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { Logger as PinoLogger } from 'nestjs-pino';
-import helmet from 'helmet';
-import { AppModule } from './app.module';
+import { AppConfig } from './config/configuration';
+import { bootstrapPublicApp } from './apps/public-app';
+import { bootstrapAdminApp } from './apps/admin-app';
 
 /**
- * Application bootstrap.
+ * Process entrypoint.
  *
- * Order of operations is intentional:
+ * Boots TWO NestApplications in the same process:
  *
- *   1. `bufferLogs: true` — buffer log lines until we've installed our Pino
- *      logger, so we don't get unsightly Nest-internal default logs.
- *   2. `abortOnError: true` — any module-construction failure (missing env
- *      var, bad config, etc.) should crash the process loudly. Better to
- *      fail at boot than to serve broken requests.
- *   3. Install the Pino logger, flush buffered logs.
- *   4. Hardening middleware: helmet (security headers), CORS off by default
- *      (this is a backend-to-backend service, not a browser surface).
- *   5. ValidationPipe globally — runs class-validator on every @Body()
- *      DTO. Rejects unknown fields so a future schema change doesn't
- *      silently swallow extra payload fields.
- *   6. Shutdown hooks — ensure SIGTERM drains in-flight requests before the
- *      process exits.
- *   7. Route prefix — all API routes are versioned under `/v1`. Health,
- *      readiness, and JWKS are intentionally unversioned.
+ *   1. **Public app** — serves `/health`, `/ready`, `/.well-known/jwks.json`,
+ *      all `/v1/*` routes (identity / auth / OAuth / engagement), and
+ *      `/graphql`. Listens on `PORT` (default 3000).
+ *
+ *   2. **Admin app** — serves `/admin/*` (api-keys, users, audit-log).
+ *      Listens on `ADMIN_PORT` (default 3001). Gated by IP allowlist +
+ *      admin API-key auth.
+ *
+ * Why two apps in one process:
+ *   * The public listener must NOT be reachable from the same
+ *     middleware chain as the admin listener — IP allowlist applies
+ *     to admin, NOT to public auth.
+ *   * A crash in admin code can't take down public auth.
+ *   * Different logger channels (public vs admin) keep the audit
+ *     stream clean.
+ *
+ * If either app fails to bind its port, the process exits 1 with a
+ * clear error. If EITHER app throws during startup, we tear down
+ * the other before exiting.
  */
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, {
-    bufferLogs: true,
-    abortOnError: true,
+  process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err);
+  });
+  process.on('unhandledRejection', (err) => {
+    console.error('[unhandledRejection]', err);
   });
 
-  app.useLogger(app.get(PinoLogger));
-  app.flushLogs();
+  // Boot both apps in parallel. The order matters only for error
+  // reporting — neither depends on the other at runtime.
+  const [publicApp, adminApp] = await Promise.all([
+    bootstrapPublicApp(),
+    bootstrapAdminApp(),
+  ]);
 
-  // Backend-to-backend service; no browser CORS surface in V1.
-  app.use(helmet());
-  app.enableCors({ origin: false });
+  // Pull ports from the public app's ConfigService (already loaded
+  // with env + validation). A standalone `new ConfigService()` would
+  // have no values.
+  const publicConfig = publicApp.get(ConfigService);
+  const publicPort = publicConfig.getOrThrow<AppConfig['port']>('port');
+  const adminPort =
+    publicConfig.getOrThrow<AppConfig['adminPort']>('adminPort');
 
-  // Run class-validator on every DTO. `whitelist: true` drops unknown
-  // fields so extra payload keys can't smuggle data past the schema.
-  // `forbidNonWhitelisted: true` makes that rejection loud.
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  await Promise.all([publicApp.listen(publicPort), adminApp.listen(adminPort)]);
 
-  // Drain in-flight requests on SIGTERM/SIGINT.
-  app.enableShutdownHooks();
-
-  // All API routes are versioned under /v1. Health, readiness, and the JWKS
-  // document are intentionally unversioned so orchestrators and resource
-  // servers can find them at conventional paths.
-  app.setGlobalPrefix('v1', {
-    exclude: [
-      { path: 'health', method: RequestMethod.GET },
-      { path: 'ready', method: RequestMethod.GET },
-      { path: '.well-known/jwks.json', method: RequestMethod.GET },
-    ],
-  });
-
-  const port = Number(process.env.PORT ?? 3000);
-  await app.listen(port);
-
-  app
+  publicApp
     .get(PinoLogger)
     .log(
-      `cerberus listening on :${port} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`,
+      `cerberus public  listening on :${publicPort} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`,
     );
+  adminApp
+    .get(PinoLogger)
+    .log(
+      `cerberus admin   listening on :${adminPort} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`,
+    );
+
+  // Drain in-flight requests on SIGTERM/SIGINT.
+  publicApp.enableShutdownHooks();
+  adminApp.enableShutdownHooks();
 }
 
 bootstrap().catch((err: unknown) => {
-  // The Nest logger is not up yet at this point, so log directly to stderr
-  // and exit non-zero. Boot failures must be loud, never silent.
-
   console.error('[bootstrap] fatal error', err);
   process.exit(1);
 });

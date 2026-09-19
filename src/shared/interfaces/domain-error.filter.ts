@@ -34,6 +34,12 @@ export class DomainErrorFilter implements ExceptionFilter {
   private readonly logger = new Logger(DomainErrorFilter.name);
 
   public catch(exception: DomainError, host: ArgumentsHost): void {
+    // Skip if this isn't an HTTP context (e.g. GraphQL routed here too).
+    // DomainErrorFilter is registered as a REST exception filter; for
+    // GraphQL we have `GraphqlDomainErrorFilter`.
+    if (host.getType<string>() !== 'http') {
+      throw exception;
+    }
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
@@ -81,11 +87,26 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'authorization.role.not_found':
       case 'identity.mfa.code_invalid':
       case 'identity.mfa.recovery_code_invalid':
+      case 'admin.auth.missing':
+      case 'admin.auth.invalid':
+      case 'admin.api_key.revoked':
+      case 'admin.api_key.expired':
+      case 'admin.api_key.not_found':
         return HttpStatus.UNAUTHORIZED;
+
+      case 'admin.ip_not_allowed':
+        return HttpStatus.FORBIDDEN;
+
+      case 'admin.audit.search.too_broad':
+      case 'admin.audit.search.invalid_int':
+      case 'admin.audit.search.out_of_range':
+      case 'admin.audit.search.invalid_range':
+        return HttpStatus.BAD_REQUEST;
 
       // 404 — not found
       case 'identity.user.not_found':
       case 'identity.mfa.not_enabled':
+      case 'admin.user.mfa_not_enabled':
         return HttpStatus.NOT_FOUND;
 
       // 409 — conflict

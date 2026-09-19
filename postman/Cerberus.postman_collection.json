@@ -1,0 +1,2639 @@
+{
+  "info": {
+    "_postman_id": "cerberus-5a7c2vhk5",
+    "name": "Cerberus",
+    "description": "Full REST + GraphQL surface for the Cerberus auth service.\n\n**Setup**\n1. Import `Cerberus.dev.postman_environment.json`.\n2. Set `baseUrl` to your running server (default `http://localhost:3000`).\n3. Run `OAuth2 > POST /v1/oauth/token — password grant` — the test script auto-saves the bearer token into the env.\n\n**Conventions**\n- Every authenticated REST endpoint expects `Authorization: Bearer {{bearerToken}}`.\n- Phase-11 placeholder endpoints (change-password, MFA, audit-log/me, update-display-name) expect `X-User-Id: {{userId}}` instead.\n- TOTP codes are auto-computed by the prerequest script of `/mfa/confirm`, `/mfa/disable`, `/mfa/verify`, and the GraphQL MFA mutations.\n- GraphQL endpoints all hit `POST /graphql`; the request body is a `{query, variables}` envelope.\n- Error responses include `code` (REST) or `extensions.code` (GraphQL) with stable strings — switch on those in client code.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "id": "9hdb8xyjh",
+      "name": "Health",
+      "description": "",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "body": null,
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Unauthenticated liveness probe. Used by load balancers and Kubernetes liveness."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "body": null,
+            "url": {
+              "raw": "{{baseUrl}}/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ready"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Unauthenticated readiness probe. Checks Postgres + Redis. Returns 200 only when both are reachable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "k66st2zps",
+      "name": "Auth",
+      "description": "",
+      "item": [
+        {
+          "id": "kfg21b26o",
+          "name": "Public",
+          "description": "",
+          "item": [
+            {
+              "name": "POST /v1/auth/login",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"alice@example.com\",\n  \"password\": \"correct-horse-battery-staple\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Authenticate with email + password. Returns a sessionId and familyId for the new session."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}",
+                      "const json = pm.response.json();",
+                      "if (json.access_token) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "}",
+                      "if (json.refresh_token) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "}",
+                      "pm.collectionVariables.set(\"currentSessionId\", pm.response.json().sessionId);",
+                      "pm.collectionVariables.set(\"currentFamilyId\", pm.response.json().familyId);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/auth/refresh",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/refresh",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "refresh"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Rotate the refresh token. Returns a new pair. The old refresh token is consumed."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}",
+                      "const json = pm.response.json();",
+                      "if (json.access_token) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "}",
+                      "if (json.refresh_token) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/auth/logout",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/logout",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "logout"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Revoke the session identified by the presented refresh token. Idempotent."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "jmq3b5flu",
+          "name": "Sessions (V1: X-User-Id placeholder)",
+          "description": "",
+          "item": [
+            {
+              "name": "GET /v1/auth/sessions",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{bearerToken}}"
+                  }
+                ],
+                "body": null,
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/sessions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "sessions"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "List all active sessions for the authenticated user. V1 uses the Phase-11 X-User-Id placeholder header (Phase 13 JWT auth replaces this). Both headers are sent for clarity."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Authenticated request succeeded\", () => {",
+                      "  if (pm.response.code === 401) {",
+                      "    throw new Error(\"Got 401 — bearer token missing or expired. Run 'OAuth2 > Token (password)' first.\");",
+                      "  }",
+                      "  pm.expect(pm.response.code).to.be.below(300);",
+                      "});"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/auth/sessions/:id/revoke",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{bearerToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"sessionId\": \"{{otherSessionId}}\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/sessions/{{otherSessionId}}/revoke",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "sessions",
+                    "{{otherSessionId}}",
+                    "revoke"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Revoke a specific session. Must be your own session (cross-user revoke returns 404). V1 uses X-User-Id."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "er6n4qwx1",
+      "name": "OAuth2 (RFC 6749 / 7662 / 7009)",
+      "description": "",
+      "item": [
+        {
+          "name": "POST /v1/oauth/token — password grant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_type\": \"password\",\n  \"username\": \"alice@example.com\",\n  \"password\": \"correct-horse-battery-staple\"\n}",
+              "options": {
+                "language": {
+                  "json": {}
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "oauth",
+                "token"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Issue an access token (JWT) via the Resource Owner Password Credentials grant. The response is the OAuth2 standard shape."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}",
+                  "const json = pm.response.json();",
+                  "if (json.access_token) {",
+                  "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
+                  "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                  "}",
+                  "if (json.refresh_token) {",
+                  "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/oauth/token — refresh_token grant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_type\": \"refresh_token\",\n  \"refresh_token\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "language": {
+                  "json": {}
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "oauth",
+                "token"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Exchange a refresh token for a new access token (RFC 6749 §6)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}",
+                  "const json = pm.response.json();",
+                  "if (json.access_token) {",
+                  "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
+                  "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                  "}",
+                  "if (json.refresh_token) {",
+                  "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/oauth/introspect",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{bearerToken}}\",\n  \"token_type_hint\": \"access_token\"\n}",
+              "options": {
+                "language": {
+                  "json": {}
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/oauth/introspect",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "oauth",
+                "introspect"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "RFC 7662 token introspection. Returns {active: true, ...} when valid; {active: false} otherwise."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/oauth/revoke",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{refreshToken}}\",\n  \"token_type_hint\": \"refresh_token\"\n}",
+              "options": {
+                "language": {
+                  "json": {}
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/oauth/revoke",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "oauth",
+                "revoke"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "RFC 7009 token revocation. Always returns 200 OK (per spec)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /.well-known/jwks.json",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "body": null,
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/jwks.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "jwks.json"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "JWKS document with all currently-verifying public keys. Resource servers fetch this on startup."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "pm.collectionVariables.set(\"kid\", pm.response.json().keys[0].kid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/oauth/admin/keys/rotate",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": null,
+            "url": {
+              "raw": "{{baseUrl}}/v1/oauth/admin/keys/rotate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "oauth",
+                "admin",
+                "keys",
+                "rotate"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Operator-only. Mint a new RSA signing key. The previous key is retired with a grace window."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}",
+                  "pm.collectionVariables.set(\"kid\", pm.response.json().kid);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pmo7bykx8",
+      "name": "Identity",
+      "description": "",
+      "item": [
+        {
+          "id": "t9xasn406",
+          "name": "Public",
+          "description": "",
+          "item": [
+            {
+              "name": "POST /v1/identity/register",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"alice@example.com\",\n  \"password\": \"correct-horse-battery-staple\",\n  \"organizationSlug\": \"\",\n  \"displayName\": \"Alice Example\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/register",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "register"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Register a new user. Open to unauthenticated callers. Auto-creates a personal organization when no slug is supplied AND no email-domain matches."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}",
+                      "pm.collectionVariables.set(\"userId\", pm.response.json().userId);",
+                      "pm.collectionVariables.set(\"organizationSlug\", pm.response.json().organizationSlug);"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "amrm3aomx",
+          "name": "Authenticated (X-User-Id placeholder)",
+          "description": "",
+          "item": [
+            {
+              "name": "POST /v1/identity/change-password",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"currentPassword\": \"correct-horse-battery-staple\",\n  \"newPassword\": \"new-correct-horse-battery-staple\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/change-password",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "change-password"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Change the authenticated user's password. Emits identity.password.changed — all sessions are revoked."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "PATCH /v1/identity/me — set display name",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"displayName\": \"Alice Newname\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/me",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "me"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Update the authenticated user's display name."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "PATCH /v1/identity/me — clear display name",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"clearDisplayName\": true\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/me",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "me"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Remove the display name."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/identity/mfa/enable",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/mfa/enable",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "mfa",
+                    "enable"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Begin MFA enrollment. Returns the TOTP secret and 10 recovery codes (returned ONCE)."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}",
+                      "pm.collectionVariables.set(\"mfaSecret\", pm.response.json().secret);",
+                      "const codes = pm.response.json().recoveryCodes;",
+                      "pm.collectionVariables.set(\"recoveryCodes\", JSON.stringify(codes));",
+                      "pm.collectionVariables.set(\"recoveryCode1\", codes[0]);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/identity/mfa/confirm",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"code\": \"{{totpCode}}\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/mfa/confirm",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "mfa",
+                    "confirm"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Confirm MFA enrollment with a 6-digit TOTP code. The prerequest script computes the TOTP from {{mfaSecret}}."
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const crypto = require(\"crypto\");",
+                      "const secret = pm.collectionVariables.get(\"mfaSecret\");",
+                      "function totp(s) {",
+                      "  const ALPHA = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\";",
+                      "  const clean = s.replace(/=+$/g, \"\").toUpperCase();",
+                      "  let bits = \"\", bytes = [];",
+                      "  for (const ch of clean) bits += ALPHA.indexOf(ch).toString(2).padStart(5, \"0\");",
+                      "  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));",
+                      "  const key = Buffer.from(bytes);",
+                      "  let counter = Math.floor(Date.now() / 30000);",
+                      "  const buf = Buffer.alloc(8);",
+                      "  for (let i = 7; i >= 0; i--) { buf[i] = counter & 0xff; counter = Math.floor(counter / 256); }",
+                      "  const hmac = crypto.createHmac(\"sha1\", key).update(buf).digest();",
+                      "  const offset = hmac[hmac.length - 1] & 0x0f;",
+                      "  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);",
+                      "  return String(code % 1_000_000).padStart(6, \"0\");",
+                      "}",
+                      "pm.collectionVariables.set(\"totpCode\", totp(secret));"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/identity/mfa/disable",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"code\": \"{{totpCode}}\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/mfa/disable",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "mfa",
+                    "disable"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Disable MFA. Requires a valid TOTP code."
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const crypto = require(\"crypto\");",
+                      "const secret = pm.collectionVariables.get(\"mfaSecret\");",
+                      "function totp(s) {",
+                      "  const ALPHA = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\";",
+                      "  const clean = s.replace(/=+$/g, \"\").toUpperCase();",
+                      "  let bits = \"\", bytes = [];",
+                      "  for (const ch of clean) bits += ALPHA.indexOf(ch).toString(2).padStart(5, \"0\");",
+                      "  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));",
+                      "  const key = Buffer.from(bytes);",
+                      "  let counter = Math.floor(Date.now() / 30000);",
+                      "  const buf = Buffer.alloc(8);",
+                      "  for (let i = 7; i >= 0; i--) { buf[i] = counter & 0xff; counter = Math.floor(counter / 256); }",
+                      "  const hmac = crypto.createHmac(\"sha1\", key).update(buf).digest();",
+                      "  const offset = hmac[hmac.length - 1] & 0x0f;",
+                      "  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);",
+                      "  return String(code % 1_000_000).padStart(6, \"0\");",
+                      "}",
+                      "pm.collectionVariables.set(\"totpCode\", totp(secret));"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/identity/mfa/verify",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"code\": \"{{totpCode}}\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/mfa/verify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "mfa",
+                    "verify"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Verify a TOTP or recovery code. Returns {matched: \"totp\" | \"recovery\"}."
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const crypto = require(\"crypto\");",
+                      "const secret = pm.collectionVariables.get(\"mfaSecret\");",
+                      "function totp(s) {",
+                      "  const ALPHA = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\";",
+                      "  const clean = s.replace(/=+$/g, \"\").toUpperCase();",
+                      "  let bits = \"\", bytes = [];",
+                      "  for (const ch of clean) bits += ALPHA.indexOf(ch).toString(2).padStart(5, \"0\");",
+                      "  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));",
+                      "  const key = Buffer.from(bytes);",
+                      "  let counter = Math.floor(Date.now() / 30000);",
+                      "  const buf = Buffer.alloc(8);",
+                      "  for (let i = 7; i >= 0; i--) { buf[i] = counter & 0xff; counter = Math.floor(counter / 256); }",
+                      "  const hmac = crypto.createHmac(\"sha1\", key).update(buf).digest();",
+                      "  const offset = hmac[hmac.length - 1] & 0x0f;",
+                      "  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);",
+                      "  return String(code % 1_000_000).padStart(6, \"0\");",
+                      "}",
+                      "pm.collectionVariables.set(\"totpCode\", totp(secret));"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0penv3cu3",
+      "name": "Engagement",
+      "description": "",
+      "item": [
+        {
+          "id": "tznddvs9x",
+          "name": "Public",
+          "description": "",
+          "item": [
+            {
+              "name": "POST /v1/engagement/email-verification/confirm",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"token\": \"{{emailVerificationToken}}\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagement/email-verification/confirm",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "engagement",
+                    "email-verification",
+                    "confirm"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Redeem an email-verification token. Single-use; expires after 24 hours."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/engagement/password-reset/request",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"alice@example.com\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagement/password-reset/request",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "engagement",
+                    "password-reset",
+                    "request"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Request a password-reset token. Always returns 204 (no enumeration leak)."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 204\", () => pm.expect(pm.response.code).to.eql(204));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "POST /v1/engagement/password-reset/confirm",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"token\": \"{{passwordResetToken}}\",\n  \"newPassword\": \"new-correct-horse-battery-staple\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagement/password-reset/confirm",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "engagement",
+                    "password-reset",
+                    "confirm"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Redeem a password-reset token and set a new password."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "ft6hsvtl7",
+          "name": "Authenticated",
+          "description": "",
+          "item": [
+            {
+              "name": "POST /v1/engagement/email-verification/request",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  }
+                ],
+                "body": null,
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagement/email-verification/request",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "engagement",
+                    "email-verification",
+                    "request"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "Request a fresh verification token for the calling user."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 204\", () => pm.expect(pm.response.code).to.eql(204));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "GET /v1/engagement/audit-log/me",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "X-User-Id",
+                    "value": "{{userId}}"
+                  }
+                ],
+                "body": null,
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagement/audit-log/me",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "engagement",
+                    "audit-log",
+                    "me"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": "The authenticated user's own audit log."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "er2xiprfm",
+      "name": "GraphQL (POST /graphql)",
+      "description": "",
+      "item": [
+        {
+          "name": "Introspect — full schema",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query IntrospectionQuery {\n  __schema {\n    queryType { name }\n    mutationType { name }\n    types { ...FullType }\n    directives { name description locations args { ...InputValue } }\n  }\n}\nfragment FullType on __Type {\n  kind name description\n  fields(includeDeprecated: true) { name description args { ...InputValue } type { ...TypeRef } isDeprecated deprecationReason }\n  inputFields { ...InputValue }\n  interfaces { ...TypeRef }\n  enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason }\n  possibleTypes { ...TypeRef }\n}\nfragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue }\nfragment TypeRef on __Type {\n  kind name\n  ofType { kind name ofType { kind name ofType { kind name } } }\n}",
+                "variables": {}
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Dump the full GraphQL schema. Useful for client codegen tools."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"__schemaQuery\", pm.response.json().data.__schema.queryType.name);",
+                  "pm.collectionVariables.set(\"__mutationType\", pm.response.json().data.__schema.mutationType.name);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Query: health (unauth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { health }",
+                "variables": {}
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Unauthenticated liveness probe over GraphQL."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"health=true\", () => pm.expect(pm.response.json().data.health).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutation: register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Register($input: RegisterInput!) {\n  register(input: $input) {\n    userId\n    email\n    organizationId\n    organizationSlug\n    autoCreatedOrg\n  }\n}",
+                "variables": {
+                  "input": {
+                    "email": "gql-alice@example.com",
+                    "password": "correct-horse-battery-staple"
+                  }
+                }
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Register a new user. Open to unauthenticated callers."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}",
+                  "pm.collectionVariables.set(\"userId\", pm.response.json().data.register.userId);",
+                  "pm.collectionVariables.set(\"organizationSlug\", pm.response.json().data.register.organizationSlug);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Query: me (auth required)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Me {\n  me {\n    id\n    email\n    displayName\n    emailVerifiedAt\n    createdAt\n    mfaEnabled\n    role\n    organization { id slug name }\n  }\n}",
+                "variables": {}
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Returns the currently-authenticated user."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Authenticated request succeeded\", () => {",
+                  "  if (pm.response.code === 401) {",
+                  "    throw new Error(\"Got 401 — bearer token missing or expired. Run 'OAuth2 > Token (password)' first.\");",
+                  "  }",
+                  "  pm.expect(pm.response.code).to.be.below(300);",
+                  "});",
+                  "pm.test(\"returns the right user\", () => pm.expect(pm.response.json().data.me.email).to.eql(\"gql-alice@example.com\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutation: updateDisplayName",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateMe($input: UpdateDisplayNameInput!) {\n  updateDisplayName(input: $input) { id displayName }\n}",
+                "variables": {
+                  "input": {
+                    "displayName": "GraphQL Alice"
+                  }
+                }
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Update display name."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutation: enableMfa",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation { enableMfa { secret otpauthUrl recoveryCodes } }",
+                "variables": {}
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Begin MFA enrollment. Returns secret + 10 recovery codes (returned ONCE)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"mfaSecret\", pm.response.json().data.enableMfa.secret);",
+                  "const codes = pm.response.json().data.enableMfa.recoveryCodes;",
+                  "pm.collectionVariables.set(\"recoveryCodes\", JSON.stringify(codes));",
+                  "pm.collectionVariables.set(\"recoveryCode1\", codes[0]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutation: confirmMfaEnrollment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Confirm($input: MfaCodeInput!) { confirmMfaEnrollment(input: $input) }",
+                "variables": {
+                  "input": {
+                    "code": "{{totpCode}}"
+                  }
+                }
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Confirm MFA enrollment with a TOTP code. The prerequest script computes the TOTP."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const crypto = require(\"crypto\");",
+                  "const secret = pm.collectionVariables.get(\"mfaSecret\");",
+                  "function totp(s) {",
+                  "  const ALPHA = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\";",
+                  "  const clean = s.replace(/=+$/g, \"\").toUpperCase();",
+                  "  let bits = \"\", bytes = [];",
+                  "  for (const ch of clean) bits += ALPHA.indexOf(ch).toString(2).padStart(5, \"0\");",
+                  "  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));",
+                  "  const key = Buffer.from(bytes);",
+                  "  let counter = Math.floor(Date.now() / 30000);",
+                  "  const buf = Buffer.alloc(8);",
+                  "  for (let i = 7; i >= 0; i--) { buf[i] = counter & 0xff; counter = Math.floor(counter / 256); }",
+                  "  const hmac = crypto.createHmac(\"sha1\", key).update(buf).digest();",
+                  "  const offset = hmac[hmac.length - 1] & 0x0f;",
+                  "  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);",
+                  "  return String(code % 1_000_000).padStart(6, \"0\");",
+                  "}",
+                  "pm.collectionVariables.set(\"totpCode\", totp(secret));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutation: disableMfa",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Disable($input: MfaCodeInput!) { disableMfa(input: $input) }",
+                "variables": {
+                  "input": {
+                    "code": "{{totpCode}}"
+                  }
+                }
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Disable MFA. Requires valid TOTP code."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const crypto = require(\"crypto\");",
+                  "const secret = pm.collectionVariables.get(\"mfaSecret\");",
+                  "function totp(s) {",
+                  "  const ALPHA = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\";",
+                  "  const clean = s.replace(/=+$/g, \"\").toUpperCase();",
+                  "  let bits = \"\", bytes = [];",
+                  "  for (const ch of clean) bits += ALPHA.indexOf(ch).toString(2).padStart(5, \"0\");",
+                  "  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));",
+                  "  const key = Buffer.from(bytes);",
+                  "  let counter = Math.floor(Date.now() / 30000);",
+                  "  const buf = Buffer.alloc(8);",
+                  "  for (let i = 7; i >= 0; i--) { buf[i] = counter & 0xff; counter = Math.floor(counter / 256); }",
+                  "  const hmac = crypto.createHmac(\"sha1\", key).update(buf).digest();",
+                  "  const offset = hmac[hmac.length - 1] & 0x0f;",
+                  "  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);",
+                  "  return String(code % 1_000_000).padStart(6, \"0\");",
+                  "}",
+                  "pm.collectionVariables.set(\"totpCode\", totp(secret));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutation: verifyMfa",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Verify($input: VerifyMfaInput!) {\n  verifyMfa(input: $input) { matched }\n}",
+                "variables": {
+                  "input": {
+                    "code": "{{totpCode}}"
+                  }
+                }
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Verify a TOTP or recovery code."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const crypto = require(\"crypto\");",
+                  "const secret = pm.collectionVariables.get(\"mfaSecret\");",
+                  "function totp(s) {",
+                  "  const ALPHA = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\";",
+                  "  const clean = s.replace(/=+$/g, \"\").toUpperCase();",
+                  "  let bits = \"\", bytes = [];",
+                  "  for (const ch of clean) bits += ALPHA.indexOf(ch).toString(2).padStart(5, \"0\");",
+                  "  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));",
+                  "  const key = Buffer.from(bytes);",
+                  "  let counter = Math.floor(Date.now() / 30000);",
+                  "  const buf = Buffer.alloc(8);",
+                  "  for (let i = 7; i >= 0; i--) { buf[i] = counter & 0xff; counter = Math.floor(counter / 256); }",
+                  "  const hmac = crypto.createHmac(\"sha1\", key).update(buf).digest();",
+                  "  const offset = hmac[hmac.length - 1] & 0x0f;",
+                  "  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);",
+                  "  return String(code % 1_000_000).padStart(6, \"0\");",
+                  "}",
+                  "pm.collectionVariables.set(\"totpCode\", totp(secret));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutation: requestPasswordReset (public)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Request($input: RequestPasswordResetInput!) { requestPasswordReset(input: $input) }",
+                "variables": {
+                  "input": {
+                    "email": "gql-alice@example.com"
+                  }
+                }
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Always returns true. No enumeration leak."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Query: jwks (public)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { jwks { keys { kid kty alg use n e } } }",
+                "variables": {}
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "JWKS document with public keys."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                  "const json = pm.response.json();",
+                  "if (json && typeof json === \"object\") {",
+                  "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                  "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Query: verifyAccessToken",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Verify($input: VerifyAccessTokenInput!) {\n  verifyAccessToken(input: $input) {\n    sub\n    org\n    role\n    scope\n    jti\n    iss\n    aud\n    iat\n    exp\n  }\n}",
+                "variables": {
+                  "input": {
+                    "token": "{{bearerToken}}"
+                  }
+                }
+              },
+              "options": {
+                "graphql": {
+                  "useSchemaFromServer": "{{baseUrl}}/graphql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "description": "Verify a JWT and return its claims."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Authenticated request succeeded\", () => {",
+                  "  if (pm.response.code === 401) {",
+                  "    throw new Error(\"Got 401 — bearer token missing or expired. Run 'OAuth2 > Token (password)' first.\");",
+                  "  }",
+                  "  pm.expect(pm.response.code).to.be.below(300);",
+                  "});",
+                  "const data = pm.response.json().data;",
+                  "if (data && data.verifyAccessToken) {",
+                  "  pm.collectionVariables.set(\"verifiedSub\", data.verifyAccessToken.sub);",
+                  "  pm.collectionVariables.set(\"verifiedOrg\", data.verifyAccessToken.org);",
+                  "  pm.collectionVariables.set(\"verifiedRole\", data.verifyAccessToken.role);",
+                  "  pm.collectionVariables.set(\"verifiedScope\", data.verifyAccessToken.scope);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xxwqxxmtf",
+      "name": "Examples — chained flows",
+      "description": "",
+      "item": [
+        {
+          "id": "cauokpx5c",
+          "name": "1. New user happy path",
+          "description": "",
+          "item": [
+            {
+              "name": "▶ Register a fresh user",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"chain-alice@example.com\",\n  \"password\": \"correct-horse-battery-staple\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/identity/register",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "identity",
+                    "register"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": ""
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.collectionVariables.set(\"userId\", pm.response.json().userId);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "▶ Login as alice (REST, saves bearer)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"chain-alice@example.com\",\n  \"password\": \"correct-horse-battery-staple\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": ""
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}",
+                      "const json = pm.response.json();",
+                      "if (json.access_token) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "}",
+                      "if (json.refresh_token) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "}",
+                      "pm.collectionVariables.set(\"currentSessionId\", pm.response.json().sessionId);",
+                      "pm.collectionVariables.set(\"currentFamilyId\", pm.response.json().familyId);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "▶ Call /me over GraphQL with the saved bearer",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{bearerToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "graphql",
+                  "graphql": {
+                    "query": "query Me { me { id email role organization { slug } } }",
+                    "variables": {}
+                  },
+                  "options": {
+                    "graphql": {
+                      "useSchemaFromServer": "{{baseUrl}}/graphql"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/graphql",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "graphql"
+                  ]
+                },
+                "description": "Verifies the bearer token round-trip end-to-end."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Authenticated request succeeded\", () => {",
+                      "  if (pm.response.code === 401) {",
+                      "    throw new Error(\"Got 401 — bearer token missing or expired. Run 'OAuth2 > Token (password)' first.\");",
+                      "  }",
+                      "  pm.expect(pm.response.code).to.be.below(300);",
+                      "});",
+                      "pm.test(\"email matches\", () => pm.expect(pm.response.json().data.me.email).to.eql(\"chain-alice@example.com\"));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "▶ List active sessions",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{bearerToken}}"
+                  }
+                ],
+                "body": null,
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/sessions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "sessions"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": ""
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Authenticated request succeeded\", () => {",
+                      "  if (pm.response.code === 401) {",
+                      "    throw new Error(\"Got 401 — bearer token missing or expired. Run 'OAuth2 > Token (password)' first.\");",
+                      "  }",
+                      "  pm.expect(pm.response.code).to.be.below(300);",
+                      "});"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "kamt4i9oo",
+          "name": "2. Password reset flow",
+          "description": "",
+          "item": [
+            {
+              "name": "▶ Request reset (always 204)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"chain-alice@example.com\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagement/password-reset/request",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "engagement",
+                    "password-reset",
+                    "request"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": ""
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 204\", () => pm.expect(pm.response.code).to.eql(204));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "▶ Confirm reset (set passwordResetToken first)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"token\": \"{{passwordResetToken}}\",\n  \"newPassword\": \"new-correct-horse-battery-staple\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagement/password-reset/confirm",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "engagement",
+                    "password-reset",
+                    "confirm"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": ""
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "▶ Re-login with the NEW password (proves rotation worked)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"chain-alice@example.com\",\n  \"password\": \"new-correct-horse-battery-staple\"\n}",
+                  "options": {
+                    "language": {
+                      "json": {}
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "description": ""
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"Status 2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "const json = pm.response.json();",
+                      "if (json && typeof json === \"object\") {",
+                      "  const reqId = pm.response.headers.get(\"x-request-id\");",
+                      "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}",
+                      "const json = pm.response.json();",
+                      "if (json.access_token) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "}",
+                      "if (json.refresh_token) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "}",
+                      "pm.collectionVariables.set(\"currentSessionId\", pm.response.json().sessionId);",
+                      "pm.collectionVariables.set(\"currentFamilyId\", pm.response.json().familyId);"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

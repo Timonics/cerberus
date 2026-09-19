@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { ListSessionsUseCase } from './application/use-cases/list-sessions.use-case';
 import { LoginUseCase } from './application/use-cases/login.use-case';
 import { LogoutUseCase } from './application/use-cases/logout.use-case';
@@ -21,7 +21,12 @@ import {
  *
  * Exports LoginUseCase + SESSION_REPOSITORY for the Authorization
  * context to consume during JWT issuance and refresh-token validation.
+ *
+ * Marked `@Global()` (V1.5) so the admin app can also import
+ * `AuthenticationModule` and reach the session repository without
+ * having to re-export every cross-context symbol explicitly.
  */
+@Global()
 @Module({
   controllers: [AuthController],
   providers: [

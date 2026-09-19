@@ -16,6 +16,7 @@ import { RevokeSessionUseCase } from '../../application/use-cases/revoke-session
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
+import { UserIdHeader } from './user-id-header.decorator';
 
 /**
  * Authentication HTTP controller.
@@ -78,14 +79,14 @@ export class AuthController {
   }
 
   @Get('sessions')
-  public async listSessions(@Headers('x-user-id') userId: string) {
+  public async listSessions(@UserIdHeader() userId: string) {
     return this.listSessionsUc.execute({ userId });
   }
 
   @Post('sessions/:sessionId/revoke')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async revokeSession(
-    @Headers('x-user-id') requesterUserId: string,
+    @UserIdHeader() requesterUserId: string,
     @Body() body: RevokeSessionDto,
   ): Promise<void> {
     await this.revokeSessionUc.execute({

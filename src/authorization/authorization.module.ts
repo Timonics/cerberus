@@ -15,6 +15,7 @@ import { RSA_KEY_PAIR_GENERATOR } from './infrastructure/crypto/jose-rsa-key-pai
 import { JwksController } from './interfaces/http/oauth.controller';
 import { OAuthAdminController } from './interfaces/http/oauth-admin.controller';
 import { OAuthController } from './interfaces/http/oauth.controller';
+import { AuthorizationResolver } from './interfaces/graphql/authorization.resolver';
 
 /**
  * Authorization bounded context — Nest wiring.
@@ -49,6 +50,9 @@ import { OAuthController } from './interfaces/http/oauth.controller';
     VerifyAccessTokenUseCase,
     GetJwksUseCase,
     RotateSigningKeyUseCase,
+
+    // GraphQL resolver
+    AuthorizationResolver,
   ],
   exports: [
     IssueAccessTokenUseCase,

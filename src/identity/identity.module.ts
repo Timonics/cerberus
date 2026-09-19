@@ -16,6 +16,7 @@ import { RegisterUserUseCase } from './application/use-cases/register-user.use-c
 import { UpdateDisplayNameUseCase } from './application/use-cases/update-display-name.use-case';
 import { VerifySecondFactorUseCase } from './application/use-cases/verify-second-factor.use-case';
 import { IdentityController } from './interfaces/http/identity.controller';
+import { IdentityResolver } from './interfaces/graphql/identity.resolver';
 import { PASSWORD_HASHER } from '../shared/domain/value-objects/password-hash';
 import { CREDENTIAL_REPOSITORY } from './domain/ports/credential.repository.port';
 import { MEMBERSHIP_REPOSITORY } from './domain/ports/membership.repository.port';
@@ -73,6 +74,9 @@ import { USER_REPOSITORY } from './domain/ports/user.repository.port';
     VerifySecondFactorUseCase,
     GetUserUseCase,
     UpdateDisplayNameUseCase,
+
+    // GraphQL resolver
+    IdentityResolver,
   ],
   exports: [
     RegisterUserUseCase,
@@ -87,6 +91,9 @@ import { USER_REPOSITORY } from './domain/ports/user.repository.port';
     USER_REPOSITORY,
     CREDENTIAL_REPOSITORY,
     MEMBERSHIP_REPOSITORY,
+    MFA_SECRET_REPOSITORY,
+    ORGANIZATION_REPOSITORY,
+    ORGANIZATION_DOMAIN_REPOSITORY,
   ],
 })
 export class IdentityModule {}

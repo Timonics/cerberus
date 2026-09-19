@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Headers,
   HttpCode,
   HttpStatus,
   Patch,
@@ -19,6 +18,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { MfaCodeDto } from './dto/mfa-code.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UserIdHeader } from '../../../authentication/interfaces/http/user-id-header.decorator';
 
 /**
  * Identity bounded-context HTTP controller.
@@ -79,7 +79,7 @@ export class IdentityController {
   @Patch('me')
   @HttpCode(HttpStatus.OK)
   public async updateMe(
-    @Headers('x-user-id') userId: string,
+    @UserIdHeader() userId: string,
     @Body() body: UpdateProfileDto,
   ) {
     if (body.displayName === undefined && body.clearDisplayName !== true) {
@@ -95,7 +95,7 @@ export class IdentityController {
   @Post('change-password')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async changePassword(
-    @Headers('x-user-id') userId: string,
+    @UserIdHeader() userId: string,
     @Body() body: ChangePasswordDto,
   ): Promise<void> {
     await this.changePasswordUc.execute({
@@ -107,14 +107,14 @@ export class IdentityController {
 
   @Post('mfa/enable')
   @HttpCode(HttpStatus.OK)
-  public async enableMfa(@Headers('x-user-id') userId: string) {
+  public async enableMfa(@UserIdHeader() userId: string) {
     return this.enableMfaUc.execute({ userId });
   }
 
   @Post('mfa/confirm')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async confirmMfa(
-    @Headers('x-user-id') userId: string,
+    @UserIdHeader() userId: string,
     @Body() body: MfaCodeDto,
   ): Promise<void> {
     await this.confirmMfaUc.execute({ userId, code: body.code });
@@ -123,7 +123,7 @@ export class IdentityController {
   @Post('mfa/disable')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async disableMfa(
-    @Headers('x-user-id') userId: string,
+    @UserIdHeader() userId: string,
     @Body() body: MfaCodeDto,
   ): Promise<void> {
     await this.disableMfaUc.execute({ userId, code: body.code });
@@ -132,7 +132,7 @@ export class IdentityController {
   @Post('mfa/verify')
   @HttpCode(HttpStatus.OK)
   public async verifyMfa(
-    @Headers('x-user-id') userId: string,
+    @UserIdHeader() userId: string,
     @Body() body: MfaCodeDto,
   ) {
     return this.verifySecondFactorUc.execute({ userId, code: body.code });

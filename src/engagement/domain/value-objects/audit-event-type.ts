@@ -30,7 +30,7 @@ export const AUDIT_EVENT_TYPES = [
   'engagement.password_reset.completed',
 ] as const;
 
-export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
+export type AuditEventTypeLiteral = (typeof AUDIT_EVENT_TYPES)[number];
 
 const EVENT_TYPE_SET = new Set<string>(AUDIT_EVENT_TYPES);
 
@@ -38,9 +38,9 @@ const EVENT_TYPE_SET = new Set<string>(AUDIT_EVENT_TYPES);
  * Validated audit-event-type value object.
  */
 export class AuditEventType {
-  public readonly value: AuditEventType;
+  public readonly value: AuditEventTypeLiteral;
 
-  private constructor(value: AuditEventType) {
+  private constructor(value: AuditEventTypeLiteral) {
     this.value = value;
   }
 
@@ -51,7 +51,7 @@ export class AuditEventType {
         `Unknown audit event type: ${raw}`,
       );
     }
-    return new AuditEventType(raw as AuditEventType);
+    return new AuditEventType(raw as AuditEventTypeLiteral);
   }
 
   public static rehydrate(value: string): AuditEventType {

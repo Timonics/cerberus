@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && node scripts/copy-graphql-sdl.js",
     "build:clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.build.tsbuildinfo',{force:true});require('fs').rmSync('tsconfig.tsbuildinfo',{force:true});\" && nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -25,12 +25,19 @@
     "prisma:studio": "prisma studio",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
-    "infra:logs": "docker compose logs -f"
+    "infra:logs": "docker compose logs -f",
+    "postman:generate": "node scripts/gen-postman-collection.js"
   },
   "dependencies": {
+    "@apollo/server": "^5.5.1",
+    "@as-integrations/express5": "^1.1.2",
+    "@graphql-tools/graphql-file-loader": "^8.1.20",
+    "@graphql-tools/load": "^8.1.17",
+    "@nestjs/apollo": "^13.4.5",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^11.0.1",
+    "@nestjs/graphql": "^13.4.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/terminus": "^12.0.0",
     "@prisma/client": "^6.0.0",
@@ -39,6 +46,7 @@
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
+    "graphql": "^16.14.2",
     "helmet": "^8.3.0",
     "ioredis": "^5.11.1",
     "joi": "^18.2.9",
@@ -84,13 +92,19 @@
     "typescript-eslint": "^8.20.0"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
-    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   }

@@ -39,6 +39,20 @@ export type DomainErrorCode =
   | 'engagement.email_verification.already_consumed'
   | 'engagement.password_reset.invalid_token'
   | 'engagement.password_reset.expired'
+  // Administration
+  | 'admin.api_key.not_found'
+  | 'admin.api_key.revoked'
+  | 'admin.api_key.expired'
+  | 'admin.api_key.ttl_non_positive'
+  | 'admin.role.unknown'
+  | 'admin.ip_not_allowed'
+  | 'admin.auth.missing'
+  | 'admin.auth.invalid'
+  | 'admin.audit.search.too_broad'
+  | 'admin.audit.search.invalid_int'
+  | 'admin.audit.search.out_of_range'
+  | 'admin.audit.search.invalid_range'
+  | 'admin.user.mfa_not_enabled'
   // Generic
   | 'domain.invariant_violation'
   | 'domain.illegal_state';
