@@ -19,19 +19,12 @@ import {
 /**
  * Authentication bounded context — Nest wiring.
  *
- * Injects use-cases from Identity (VerifySecondFactorUseCase,
- * UserRepository, CredentialRepository) implicitly via the module graph —
- * `IdentityModule` is imported before `AuthenticationModule` in
- * `AppModule`, so the symbols are already in the DI scope by the time
- * this module's providers are constructed.
- *
- * Exports LoginUseCase etc. for the Authorization context (Phase 13)
- * to call during JWT issuance.
+ * Exports LoginUseCase + SESSION_REPOSITORY for the Authorization
+ * context to consume during JWT issuance and refresh-token validation.
  */
 @Module({
   controllers: [AuthController],
   providers: [
-    // Infrastructure
     PrismaSessionRepository,
     RedisLoginAttemptRepository,
     RandomRefreshTokenGenerator,
@@ -49,14 +42,12 @@ import {
     },
     LockoutPolicy,
 
-    // Use-cases
     LoginUseCase,
     RefreshSessionUseCase,
     LogoutUseCase,
     ListSessionsUseCase,
     RevokeSessionUseCase,
 
-    // Cross-context event handler — auto-wires via OnModuleInit.
     PasswordChangedSessionRevoker,
   ],
   exports: [

@@ -10,6 +10,7 @@ import { RedisModule } from './redis/redis.module';
 import { HealthModule } from './health/health.module';
 import { IdentityModule } from './identity/identity.module';
 import { AuthenticationModule } from './authentication/authentication.module';
+import { AuthorizationModule } from './authorization/authorization.module';
 import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
 
 /**
@@ -43,6 +44,7 @@ import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
     RedisModule,
     IdentityModule,
     AuthenticationModule,
+    AuthorizationModule,
     HealthModule,
   ],
   providers: [

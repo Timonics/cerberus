@@ -86,6 +86,7 @@ import { USER_REPOSITORY } from './domain/ports/user.repository.port';
     PASSWORD_HASHER,
     USER_REPOSITORY,
     CREDENTIAL_REPOSITORY,
+    MEMBERSHIP_REPOSITORY,
   ],
 })
 export class IdentityModule {}
