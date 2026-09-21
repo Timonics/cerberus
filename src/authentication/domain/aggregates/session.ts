@@ -60,6 +60,14 @@ export class Session {
     public readonly issuedAt: Date,
     public readonly expiresAt: Date,
     public readonly lastUsedAt: Date | null,
+    /**
+     * V1.5: chain of recently-rotated refresh-token hashes. Length is
+     * bounded to a small window (5 entries by default). When a presented
+     * token's hash is in this list, the family is mass-revoked — the
+     * legitimate user already has the rotated token, so a re-presentation
+     * of an old hash is theft.
+     */
+    public readonly previousRefreshHashes: ReadonlyArray<string>,
     public readonly revokedAt: Date | null,
     public readonly revokeReason: RevokeReason | null,
     private readonly pendingEvents: DomainEvent[],
@@ -112,6 +120,7 @@ export class Session {
       now,
       expiresAt,
       null, // lastUsedAt — null on first creation
+      [], // previousRefreshHashes — fresh session
       null, // revokedAt — null on first creation
       null, // revokeReason — null on first creation
       [], // pendingEvents — sessions don't emit events on creation
@@ -130,6 +139,8 @@ export class Session {
     issuedAt: Date;
     expiresAt: Date;
     lastUsedAt: Date | null;
+    /** V1.5: chain of rotated-hashes for reuse detection. */
+    previousRefreshHashes?: ReadonlyArray<string>;
     revokedAt: Date | null;
     revokeReason: RevokeReason | null;
   }): Session {
@@ -145,6 +156,7 @@ export class Session {
       params.issuedAt,
       params.expiresAt,
       params.lastUsedAt,
+      params.previousRefreshHashes ?? [],
       params.revokedAt,
       params.revokeReason,
       [],
@@ -177,6 +189,15 @@ export class Session {
       );
     }
     const now = params.clock.now();
+    // V1.5: shift the current refreshHash into previousRefreshHashes
+    // (bounded to a small window) so reuse-detection can identify a
+    // re-presentation of an old hash. Truncate from the front to
+    // keep the array small.
+    const PREVIOUS_HASH_WINDOW = 5;
+    const newPrevious = [
+      this.refreshHash.value,
+      ...this.previousRefreshHashes,
+    ].slice(0, PREVIOUS_HASH_WINDOW);
     return new Session(
       this.id,
       this.userId,
@@ -189,6 +210,7 @@ export class Session {
       this.issuedAt,
       params.newExpiresAt,
       now,
+      newPrevious,
       null, // revokedAt — rotation only happens on live sessions
       null, // revokeReason — null while alive
       this.pendingEvents,
@@ -228,6 +250,7 @@ export class Session {
       this.issuedAt,
       this.expiresAt,
       this.lastUsedAt,
+      this.previousRefreshHashes,
       now,
       reason,
       this.pendingEvents,

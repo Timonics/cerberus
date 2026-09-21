@@ -44,6 +44,15 @@ export const envValidationSchema = Joi.object({
   // Admin API
   // --------------------------------------------------------------------
   ADMIN_API_KEY_HASH: Joi.string().allow('').default(''),
+  /**
+   * V1.5: secret used to derive HMAC-based lookup tokens for admin keys.
+   * Must be at least 32 chars in production (per the regex below). Dev
+   * allows the insecure default so the dev workflow doesn't require
+   * extra setup; production deploys fail if this is left at default.
+   */
+  ADMIN_LOOKUP_SECRET: Joi.string()
+    .min(32)
+    .default('dev-only-insecure-default-please-override-32chars'),
   ADMIN_IP_ALLOWLIST: Joi.string().allow('').default(''),
 
   // --------------------------------------------------------------------

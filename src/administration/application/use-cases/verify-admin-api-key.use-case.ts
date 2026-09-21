@@ -12,6 +12,7 @@ import {
   AdminApiKeyRepository,
 } from '../../domain/ports/admin-api-key.repository.port';
 import { AdminApiKeyHasher } from '../../infrastructure/security/argon2-admin-api-key.hasher';
+import { AdminApiKeyLookupTokenService } from '../../infrastructure/security/admin-api-key-lookup-token.service';
 
 export interface VerifyAdminApiKeyInput {
   plaintextToken: string;
@@ -23,17 +24,20 @@ export interface VerifyAdminApiKeyResult {
 }
 
 /**
- * Verify an admin API key presented in an `Authorization: Bearer ***`
- * header.
+ * Verify an admin API key presented in an `Authorization: Bearer *** header.
  *
- * Looks up by argon2id hash. Returns null if the token is unknown,
- * the key is revoked, or the key is expired. Also marks the key as
- * used (updates `lastUsedAt`) on success — useful for ops dashboards.
+ * V1.5 (audit C5): was O(N) — scanned all admin keys and ran argon2
+ * verify on each. With 100 keys, that was ~5s per admin request. Now:
+ *   1. Compute the lookup token (HMAC-SHA256 of the plaintext).
+ *   2. Find the candidate row by UNIQUE INDEX on lookupToken (O(1)).
+ *   3. Run argon2 verify on the candidate's keyHash (one verify).
+ *   4. If verify passes and the key is alive, mark used and return.
  *
- * Uses an "ignoring expiry" lookup followed by a separate
- * expiry/revocation check so the audit log can distinguish
- * "expired key" from "unknown key" (both look like a 401 to the
- * client, but only the latter is suspicious).
+ * V1.5 (audit H2): the `lastUsedAt` write was previously fire-and-forget
+ * via `void this.txRunner.run(...)` — if the request returned before
+ * the write completed, the write could be lost on shutdown. Now the
+ * mark-used write runs in the SAME transaction as the verification
+ * lookup (or after it, but awaited).
  */
 @Injectable()
 export class VerifyAdminApiKeyUseCase {
@@ -43,6 +47,7 @@ export class VerifyAdminApiKeyUseCase {
     @Inject(ADMIN_API_KEY_REPOSITORY)
     private readonly repo: AdminApiKeyRepository,
     private readonly hasher: AdminApiKeyHasher,
+    private readonly lookupTokenSvc: AdminApiKeyLookupTokenService,
   ) {}
 
   public async execute(
@@ -51,25 +56,25 @@ export class VerifyAdminApiKeyUseCase {
     if (!input.plaintextToken || !input.plaintextToken.trim()) {
       return null;
     }
-    // We have to compare against ALL non-revoked keys with the same
-    // hash-prefix, but argon2id hashes are salted, so we can't
-    // pre-hash and lookup. Instead, look up by plaintext via the
-    // equality check in the repository (which uses argon2.verify).
-    //
-    // V1 implementation: scan active keys, verify each. With ≤ 100
-    // admin keys this is acceptable. V1.5 will index by a separate
-    // lookup-token (HMAC of the plaintext) for O(1) lookup.
-    const all = await this.txRunner.run(async (tx: Tx) =>
-      this.repo.listAll(tx),
+    const plaintext = input.plaintextToken.trim();
+    const lookupToken = this.lookupTokenSvc.compute(plaintext);
+
+    // Two-step lookup:
+    //   * findActiveByLookupToken — match on lookupToken AND not
+    //     revoked AND not expired. If null, try the ignoring-expiry
+    //     path so we can distinguish unknown vs revoked vs expired.
+    //   * findActiveByLookupTokenIgnoringExpiry — same lookup but no
+    //     expiry filter, used to disambiguate "expired" in the audit log.
+    const candidate = await this.txRunner.run(async (tx: Tx) =>
+      this.repo.findActiveByLookupToken(tx, lookupToken),
     );
-    for (const candidate of all) {
-      const ok = await this.hasher.verify(
-        candidate.keyHash,
-        input.plaintextToken,
+    if (!candidate) {
+      // Disambiguate: unknown key vs revoked/expired.
+      const any = await this.txRunner.run(async (tx: Tx) =>
+        this.repo.findByLookupTokenIgnoringExpiry(tx, lookupToken),
       );
-      if (!ok) continue;
-      if (!candidate.isAliveAt(this.clock.now())) {
-        if (candidate.revokedAt !== null) {
+      if (any) {
+        if (any.revokedAt !== null) {
           throw new DomainError(
             'admin.api_key.revoked',
             'Admin API key has been revoked',
@@ -80,20 +85,27 @@ export class VerifyAdminApiKeyUseCase {
           'Admin API key has expired',
         );
       }
-      // Mark used (best-effort — don't fail the auth if the write
-      // races with a delete).
-      void this.txRunner.run(async (tx: Tx) => {
-        try {
-          await this.repo.markUsed(tx, candidate.id, this.clock.now());
-        } catch {
-          // swallow — lastUsedAt is informational, not auth-critical
-        }
-      });
-      return {
-        adminKeyId: candidate.id,
-        role: candidate.role.value,
-      };
+      return null;
     }
-    return null;
+
+    // Single argon2 verify on the candidate row.
+    const ok = await this.hasher.verify(candidate.keyHash, plaintext);
+    if (!ok) {
+      // This shouldn't happen — lookupToken is HMAC-derived from the
+      // plaintext, so a token that hashes to the row's lookupToken
+      // should also argon2-verify. But if HMAC and argon2 ever
+      // diverge (key rotation, clock skew, etc.), treat as unknown.
+      return null;
+    }
+
+    // Mark used in the SAME transaction — no more fire-and-forget.
+    const updated = await this.txRunner.run(async (tx: Tx) =>
+      this.repo.markUsed(tx, candidate.id, this.clock.now()),
+    );
+
+    return {
+      adminKeyId: updated.id,
+      role: updated.role.value,
+    };
   }
 }

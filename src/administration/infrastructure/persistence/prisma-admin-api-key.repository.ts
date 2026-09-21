@@ -22,6 +22,42 @@ export class PrismaAdminApiKeyRepository extends AdminApiKeyRepository {
     return row ? this.toDomain(row) : null;
   }
 
+  /**
+   * V1.5: O(1) lookup by HMAC-derived lookup token. UNIQUE INDEX on
+   * `lookupToken` makes this a single DB read regardless of how many
+   * admin keys exist.
+   */
+  public async findActiveByLookupToken(
+    tx: Tx,
+    lookupToken: string,
+  ): Promise<AdminApiKey | null> {
+    const client = tx as PrismaTx;
+    const now = new Date();
+    const row = await client.adminApiKey.findFirst({
+      where: {
+        lookupToken,
+        revokedAt: null,
+        expiresAt: { gt: now },
+      },
+    });
+    return row ? this.toDomain(row) : null;
+  }
+
+  /**
+   * V1.5: same as above but ignores expiry — used to disambiguate
+   * "expired" from "unknown" in the audit log.
+   */
+  public async findByLookupTokenIgnoringExpiry(
+    tx: Tx,
+    lookupToken: string,
+  ): Promise<AdminApiKey | null> {
+    const client = tx as PrismaTx;
+    const row = await client.adminApiKey.findUnique({
+      where: { lookupToken },
+    });
+    return row ? this.toDomain(row) : null;
+  }
+
   public async findActiveByPlaintextHash(
     tx: Tx,
     tokenHash: string,
@@ -57,6 +93,7 @@ export class PrismaAdminApiKeyRepository extends AdminApiKeyRepository {
       id: key.id,
       name: key.name,
       keyHash: key.keyHash,
+      lookupToken: key.lookupToken,
       role: key.role.value,
       createdAt: key.createdAt,
       createdBy: key.createdBy,
@@ -97,6 +134,7 @@ export class PrismaAdminApiKeyRepository extends AdminApiKeyRepository {
     id: string;
     name: string;
     keyHash: string;
+    lookupToken: string;
     role: string;
     createdAt: Date;
     createdBy: string;
@@ -109,6 +147,7 @@ export class PrismaAdminApiKeyRepository extends AdminApiKeyRepository {
       id: row.id,
       name: row.name,
       keyHash: row.keyHash,
+      lookupToken: row.lookupToken,
       role: row.role,
       createdAt: row.createdAt,
       createdBy: row.createdBy,

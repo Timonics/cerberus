@@ -14,9 +14,10 @@ import { RotateSigningKeyUseCase } from './application/use-cases/rotate-signing-
 import { VerifyAccessTokenUseCase } from './application/use-cases/verify-access-token.use-case';
 import { SIGNING_KEY_REPOSITORY } from './domain/ports/signing-key.repository.port';
 import { RSA_KEY_PAIR_GENERATOR } from './infrastructure/crypto/jose-rsa-key-pair-generator';
-import { JwksController } from './interfaces/http/oauth.controller';
-import { OAuthAdminController } from './interfaces/http/oauth-admin.controller';
-import { OAuthController } from './interfaces/http/oauth.controller';
+import {
+  JwksController,
+  OAuthController,
+} from './interfaces/http/oauth.controller';
 import { AuthorizationResolver } from './interfaces/graphql/authorization.resolver';
 
 /**
@@ -29,7 +30,7 @@ import { AuthorizationResolver } from './interfaces/graphql/authorization.resolv
 @Global()
 @Module({
   imports: [AuthenticationModule],
-  controllers: [OAuthController, JwksController, OAuthAdminController],
+  controllers: [OAuthController, JwksController],
   providers: [
     // Infrastructure
     PrismaSigningKeyRepository,

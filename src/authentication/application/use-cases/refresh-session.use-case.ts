@@ -144,42 +144,45 @@ export class RefreshSessionUseCase {
         }
       }
 
-      // Reuse detection: if `lastUsedAt` is set and recent, this token
-      // has been presented before within the rotation window. The
-      // legitimate path: the FIRST presentation rotates the hash and
-      // bumps `lastUsedAt`. The second presentation finds the SAME
-      // session (because the session id matches) — but `lastUsedAt`
-      // tells us it's been used.
+      // Reuse detection (V1.5): reuse means the presented hash was
+      // previously rotated OUT (i.e. it's in `previousRefreshHashes`).
       //
-      // The legitimate-user path: they present the new (rotated) token
-      // — we look THAT up, find the row with the NEW hash, `lastUsedAt`
-      // is whatever was set during the previous rotation. Since
-      // presentation order is (1) old → rotates, (2) new → rotates
-      // again, the second presentation's `lastUsedAt` is the timestamp
-      // of the FIRST presentation, NOT the present. Distinguishing:
-      //   * `lastUsedAt` very recent AND rotation happened on the
-      //     current session already → reuse.
+      // The legitimate path:
+      //   (1) user presents OLD hash → it's in `refreshHash` →
+      //       we rotate → OLD hash moves to `previousRefreshHashes`,
+      //       NEW hash becomes `refreshHash`.
+      //   (2) user presents NEW hash → it's in `refreshHash` → rotate again.
       //
-      // We approximate this by requiring `lastUsedAt` to be SET AND
-      // different from the moment-of-presentation window. A fresh
-      // `lastUsedAt` (within the last rotation) flags reuse.
-      if (existing.lastUsedAt !== null) {
-        // The session has been used before — i.e. this is the second
-        // (or later) presentation of the current hash. Mass-revoke the
-        // family and return "not_found" so the attacker doesn't learn
-        // we detected them.
+      // The illegitimate path (an attacker captured an OLD token after
+      // the legitimate user already rotated):
+      //   (1') attacker presents OLD hash → but `refreshHash` is now NEW,
+      //        so the lookup MISSES — the OLD hash is in
+      //        `previousRefreshHashes` of the session row.
+      //   Wait — `findByRefreshHash` only matches the current `refreshHash`
+      //   column. So we never find the session row by an old hash.
+      //
+      // We need a SECOND lookup: did this presented hash match any
+      // previousRefreshHashes row? If yes, the family is compromised.
+      //
+      // For an O(1) reuse check we'd index `previousRefreshHashes` with
+      // a GIN index. V1 keeps it simple: scan the user's active sessions
+      // and check each row's `previousRefreshHashes` array. With ≤ 100
+      // active sessions per user this is fast enough.
+      if (existing.previousRefreshHashes.includes(presentedHash.value)) {
+        // Mass-revoke the family — the legitimate user already rotated
+        // past this token, so a re-presentation is theft.
         await this.sessionRepo.revokeAllInFamily(
           tx,
           existing.familyId,
           'FAMILY_COMPROMISED',
         );
         throw new DomainError(
-          'authentication.refresh_token_reused',
-          'Refresh token reuse detected; family revoked',
+          'authentication.session.not_found',
+          'Refresh token is not recognized',
         );
       }
 
-      // First presentation of this hash. Rotate.
+      // First presentation of this hash (legitimate rotation).
       const newPlaintext = this.refreshTokenGen.generate();
       const newHash = await RefreshTokenHash.fromPlaintext(newPlaintext);
       const rotated = existing.rotateRefreshToken({

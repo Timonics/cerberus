@@ -21,12 +21,14 @@ import {
   AdminApiKeyHasher,
 } from './infrastructure/security/argon2-admin-api-key.hasher';
 import { PrismaAdminApiKeyRepository } from './infrastructure/persistence/prisma-admin-api-key.repository';
+import { AdminApiKeyLookupTokenService } from './infrastructure/security/admin-api-key-lookup-token.service';
 import { ADMIN_API_KEY_REPOSITORY } from './domain/ports/admin-api-key.repository.port';
 import { AdminController } from './interfaces/http/admin.controller';
 import { AdminHealthController } from './interfaces/http/admin-health.controller';
 import { AdminApiKeyGuard } from './interfaces/security/admin-api-key.guard';
 import { AdminGraphqlResolver } from './interfaces/graphql/admin.resolver';
 import { IpAllowlistGuard } from './interfaces/security/ip-allowlist.guard';
+import { OAuthAdminController } from './interfaces/http/oauth-admin.controller';
 
 /**
  * Token used to inject the parsed IP allowlist into `IpAllowlistGuard`.
@@ -87,11 +89,12 @@ export const ADMIN_IP_ALLOWLIST = Symbol('ADMIN_IP_ALLOWLIST');
     AuthenticationModule,
     EngagementModule,
   ],
-  controllers: [AdminController, AdminHealthController],
+  controllers: [AdminController, AdminHealthController, OAuthAdminController],
   providers: [
     // Infrastructure
     PrismaAdminApiKeyRepository,
     AdminApiKeyHasher,
+    AdminApiKeyLookupTokenService,
     {
       provide: ADMIN_API_KEY_REPOSITORY,
       useClass: PrismaAdminApiKeyRepository,

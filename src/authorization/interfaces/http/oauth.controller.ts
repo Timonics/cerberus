@@ -7,8 +7,10 @@ import {
   HttpStatus,
   Post,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { Public } from '../security/public.decorator';
+import { JwtAuthGuard } from '../security/jwt-auth.guard';
 import { Response } from 'express';
 import { GetJwksUseCase } from '../../application/use-cases/get-jwks.use-case';
 import { IntrospectTokenUseCase } from '../../application/use-cases/introspect-token.use-case';
@@ -34,17 +36,24 @@ import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/veri
  *       refresh_token, scope}.
  *
  *   POST /v1/oauth/introspect
- *     — RFC 7662. Returns {active, ...claims}. V1: open endpoint
- *       (the spec recommends resource-server auth; that lands in the
- *       Administration context — Phase 15).
+ *     — RFC 7662. V1.5: now requires Bearer auth (was public in V1).
+ *       Resource servers authenticate with their own access token
+ *       (or, in V1, with an admin API key — V2 will add a dedicated
+ *       `introspect` scope).
+ *     — Returns {active, ...claims}.
  *
  *   POST /v1/oauth/revoke
- *     — RFC 7009. Always returns 200 per the spec.
+ *     — RFC 7009. V1.5: now requires Bearer auth (was public in V1).
  *
- *   POST /v1/oauth/admin/keys/rotate
- *     — Operator-only endpoint to mint a new signing key. Not
- *       authenticated (V1) — relies on network-level ACL in
- *       production. Phase 15 wires admin API-key auth.
+ *   POST /admin/keys/rotate  (moved to AdminController — see
+ *     src/administration/interfaces/http/oauth-admin.controller.ts)
+ *
+ * V1.5 fix (audit C3): the introspect + revoke endpoints are now behind
+ * `JwtAuthGuard`. RFC 7662 §2.1 requires introspection to be
+ * authenticated; an unauthenticated endpoint enables token oracles and
+ * DoS-via-revoke. Until we ship dedicated resource-server credentials
+ * (V2), we accept a JWT bearer token as proof of identity. A
+ * resource server's JWT is the easiest path — they already have one.
  */
 @Controller('oauth')
 export class OAuthController {
@@ -145,7 +154,13 @@ export class OAuthController {
     });
   }
 
-  @Public()
+  // V1.5 (audit C3): introspect now requires a valid Bearer token.
+  // The guard authenticates the resource server, then this method
+  // introspects the supplied token. We don't enforce a specific scope
+  // here — V2 will add `introspect:read` scope — because V1 resource
+  // servers only have full access tokens. Requiring ANY valid token is
+  // still strictly better than no auth at all.
+  @UseGuards(JwtAuthGuard)
   @Post('introspect')
   @HttpCode(HttpStatus.OK)
   public async introspect(@Body() body: TokenInspectDto) {
@@ -155,7 +170,8 @@ export class OAuthController {
     });
   }
 
-  @Public()
+  // V1.5 (audit C3): revoke also requires Bearer auth.
+  @UseGuards(JwtAuthGuard)
   @Post('revoke')
   @HttpCode(HttpStatus.OK)
   public async revoke(@Body() body: TokenInspectDto): Promise<void> {

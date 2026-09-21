@@ -245,7 +245,16 @@ model Session {
   organizationId String?   @db.Uuid
   issuedAt     DateTime      @default(now())
   expiresAt    DateTime
+  /// Last presentation of `refreshHash`. Distinct from rotation history:
+  /// `lastUsedAt` is just the timestamp; `previousRefreshHashes` is the
+  /// chain of replaced hashes (used to detect token reuse).
   lastUsedAt    DateTime?
+  /// V1.5: hashes of rotated refresh tokens, kept for the reuse-detection
+  /// window (~5 minutes). Empty in fresh sessions. When a presented token
+  /// matches an entry here, the session family is mass-revoked — the
+  /// legitimate user already has the rotated token, so a re-presentation
+  /// of an old hash is theft.
+  previousRefreshHashes String[] @default([])
   revokedAt     DateTime?
   /// Reason recorded on revoke; null while the session is alive.
   revokeReason RevokeReason?
@@ -389,7 +398,14 @@ enum AdminRole {
 model AdminApiKey {
   id           String     @id @default(uuid()) @db.Uuid
   name         String     @db.VarChar(80)
+  /// Argon2id hash of the plaintext key. Used for cryptographic verification
+  /// (the slow path; only fires after a lookup-token hit).
   keyHash      String     @db.VarChar(255)
+  /// V1.5: HMAC-SHA256 of the plaintext key, used as an O(1) lookup
+  /// token. Stored as hex. We never look up by `keyHash` (which would
+  /// require argon2 verify on every row); we look up by `lookupToken`
+  /// first, then verify the match with argon2.
+  lookupToken  String     @unique @db.VarChar(64)
   role         AdminRole  @default(ADMIN)
   createdAt    DateTime   @default(now())
   createdBy    String     @db.VarChar(120)
@@ -402,6 +418,7 @@ model AdminApiKey {
   @@index([keyHash])
   @@index([revokedAt])
   @@index([expiresAt])
+  @@index([lookupToken])
   @@map("admin_api_keys")
 }
 

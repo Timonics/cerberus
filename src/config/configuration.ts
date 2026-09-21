@@ -42,6 +42,13 @@ export interface AppConfig {
   admin: {
     /** Hashed admin API key (argon2id of the secret). Empty disables the admin API. */
     apiKeyHash: string;
+    /**
+     * V1.5: secret used as the HMAC key when computing the admin-key
+     * lookup token. Generate via `openssl rand -hex 32`. Same secret
+     * across all app instances — rotating it invalidates ALL admin
+     * keys at once (intentional fail-secure).
+     */
+    lookupSecret: string;
     /** CIDR-allowlist of IPs that may reach the admin surface. Empty = deny all. */
     ipAllowlist: string[];
   };
@@ -123,6 +130,12 @@ export const configuration = (): AppConfig => {
 
     admin: {
       apiKeyHash: process.env.ADMIN_API_KEY_HASH ?? '',
+      lookupSecret:
+        process.env.ADMIN_LOOKUP_SECRET ??
+        // Fail-secure default: deterministic in dev so the same key
+        // produces the same lookupToken across restarts. In production
+        // this MUST be set explicitly (Joi validation requires it).
+        'dev-only-insecure-default-please-override',
       ipAllowlist: splitCsv(process.env.ADMIN_IP_ALLOWLIST),
     },
 

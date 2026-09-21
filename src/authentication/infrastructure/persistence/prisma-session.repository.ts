@@ -73,6 +73,7 @@ export class PrismaSessionRepository extends SessionRepository {
       issuedAt: session.issuedAt,
       expiresAt: session.expiresAt,
       lastUsedAt: session.lastUsedAt,
+      previousRefreshHashes: [...session.previousRefreshHashes],
       revokedAt: session.revokedAt,
       revokeReason: session.revokeReason,
     };
@@ -83,6 +84,7 @@ export class PrismaSessionRepository extends SessionRepository {
         refreshHash: data.refreshHash,
         expiresAt: data.expiresAt,
         lastUsedAt: data.lastUsedAt,
+        previousRefreshHashes: data.previousRefreshHashes,
         revokedAt: data.revokedAt,
         revokeReason: data.revokeReason,
       },
@@ -133,6 +135,8 @@ export class PrismaSessionRepository extends SessionRepository {
     issuedAt: Date;
     expiresAt: Date;
     lastUsedAt: Date | null;
+    /** V1.5: chain of rotated refresh-token hashes (reuse detection). */
+    previousRefreshHashes?: string[];
     revokedAt: Date | null;
     revokeReason: string | null;
   }): Session {
@@ -150,6 +154,7 @@ export class PrismaSessionRepository extends SessionRepository {
       issuedAt: row.issuedAt,
       expiresAt: row.expiresAt,
       lastUsedAt: row.lastUsedAt,
+      previousRefreshHashes: row.previousRefreshHashes ?? [],
       revokedAt: row.revokedAt,
       revokeReason:
         row.revokeReason && isRevokeReason(row.revokeReason)

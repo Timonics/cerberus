@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -13,9 +15,22 @@ import { RegisterAppUseCase } from '../../application/use-cases/register-app.use
 import { RotateAppApiKeyUseCase } from '../../application/use-cases/rotate-app-api-key.use-case';
 import { RevokeAppUseCase } from '../../application/use-cases/revoke-app.use-case';
 import { Public } from '../../../authorization/interfaces/security/public.decorator';
+import { VerifyAppApiKeyUseCase } from '../../application/use-cases/verify-app-api-key.use-case';
 
 /**
- * App registration + key-rotation endpoints (public surface).
+ * App registration + key-rotation endpoints.
+ *
+ * V1.5 (audit C2) hardening:
+ *   * `register` (POST /v1/apps) — still @Public for self-service.
+ *     In production this should be locked to admin (TODO V2: gate
+ *     on `NODE_ENV=production` + admin key).
+ *   * `rotateKey` (PATCH /v1/apps/:id/rotate-key) — now requires the
+ *     app's CURRENT valid X-Cerberus-App-Id + X-Cerberus-App-Secret
+ *     headers, and the `:id` URL param must match the X-Cerberus-App-Id.
+ *     Previously anyone who knew an app uuid could rotate its key.
+ *   * `revoke` (DELETE /v1/apps/:id) — same auth as rotate-key. The
+ *     legitimate app revokes itself; admins have a separate path
+ *     through `/admin/api-keys` if needed (V2).
  *
  * V1 has no GET list endpoint — apps fetch their own details by
  * storing the app id returned from `POST /v1/apps`. V1.5 will add
@@ -27,7 +42,37 @@ export class AppsController {
     private readonly registerAppUc: RegisterAppUseCase,
     private readonly rotateKeyUc: RotateAppApiKeyUseCase,
     private readonly revokeAppUc: RevokeAppUseCase,
+    private readonly verifyAppApiKeyUc: VerifyAppApiKeyUseCase,
   ) {}
+
+  /**
+   * Verify the caller's current app credentials before allowing a
+   * rotate-key or revoke operation. Throws `ForbiddenException` if the
+   * path id doesn't match the supplied `X-Cerberus-App-Id` header.
+   */
+  private async requireOwnCurrentKey(
+    urlAppId: string,
+    headerAppId: string | undefined,
+    headerAppSecret: string | undefined,
+  ): Promise<void> {
+    if (!headerAppId || !headerAppSecret) {
+      throw new ForbiddenException(
+        'X-Cerberus-App-Id and X-Cerberus-App-Secret headers required',
+      );
+    }
+    if (urlAppId !== headerAppId) {
+      throw new ForbiddenException(
+        'App ID in URL does not match X-Cerberus-App-Id header',
+      );
+    }
+    const verified = await this.verifyAppApiKeyUc.execute({
+      appId: headerAppId.trim(),
+      plaintextApiKey: headerAppSecret.trim(),
+    });
+    if (!verified || verified.appId !== urlAppId) {
+      throw new ForbiddenException('Invalid current app credentials');
+    }
+  }
 
   @Public()
   @Post()
@@ -56,13 +101,17 @@ export class AppsController {
     };
   }
 
-  @Public()
+  // V1.5 (audit C2): require current app credentials. Only the app
+  // itself can rotate its own key.
   @Patch(':id/rotate-key')
   @HttpCode(HttpStatus.OK)
   public async rotateKey(
     @Param('id') id: string,
     @Body() body: RotateAppApiKeyDto,
+    @Headers('x-cerberus-app-id') appId?: string,
+    @Headers('x-cerberus-app-secret') appSecret?: string,
   ) {
+    await this.requireOwnCurrentKey(id, appId, appSecret);
     const { app, plaintextApiKey } = await this.rotateKeyUc.execute(
       id,
       body.ttlSeconds,
@@ -73,10 +122,16 @@ export class AppsController {
     };
   }
 
-  @Public()
+  // V1.5 (audit C2): require current app credentials. Only the app
+  // itself can revoke itself. Admin revoke uses a different path.
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  public async revoke(@Param('id') id: string): Promise<void> {
+  public async revoke(
+    @Param('id') id: string,
+    @Headers('x-cerberus-app-id') appId?: string,
+    @Headers('x-cerberus-app-secret') appSecret?: string,
+  ): Promise<void> {
+    await this.requireOwnCurrentKey(id, appId, appSecret);
     await this.revokeAppUc.execute(id);
   }
 }

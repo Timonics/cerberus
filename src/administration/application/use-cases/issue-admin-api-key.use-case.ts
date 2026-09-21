@@ -19,6 +19,7 @@ import {
   AdminApiKeyRepository,
 } from '../../domain/ports/admin-api-key.repository.port';
 import { AdminApiKeyHasher } from '../../infrastructure/security/argon2-admin-api-key.hasher';
+import { AdminApiKeyLookupTokenService } from '../../infrastructure/security/admin-api-key-lookup-token.service';
 import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
 export interface IssueAdminApiKeyInput {
@@ -53,6 +54,7 @@ export class IssueAdminApiKeyUseCase {
     @Inject(ADMIN_API_KEY_REPOSITORY)
     private readonly repo: AdminApiKeyRepository,
     private readonly hasher: AdminApiKeyHasher,
+    private readonly lookupTokenSvc: AdminApiKeyLookupTokenService,
     private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
@@ -61,6 +63,7 @@ export class IssueAdminApiKeyUseCase {
   ): Promise<IssueAdminApiKeyResult> {
     const plaintextToken = generateAdminApiKeyPlaintext();
     const keyHash = await this.hasher.hash(plaintextToken);
+    const lookupToken = this.lookupTokenSvc.compute(plaintextToken);
 
     const key = await this.txRunner.run<AdminApiKey>(async (tx: Tx) => {
       const k = AdminApiKey.issue({
@@ -68,6 +71,7 @@ export class IssueAdminApiKeyUseCase {
         name: input.name,
         plaintextToken,
         keyHash,
+        lookupToken,
         role: 'ADMIN',
         createdBy: input.createdBy,
         clock: this.clock,

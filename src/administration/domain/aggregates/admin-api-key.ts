@@ -29,6 +29,15 @@ export class AdminApiKey {
     public readonly id: string,
     public readonly name: string,
     public readonly keyHash: string,
+    /**
+     * V1.5: deterministic HMAC-SHA256 of the plaintext token. Used as
+     * the lookup key in the DB (UNIQUE INDEX). Without this, every
+     * admin request has to scan all keys and run argon2 verify on each
+     * one — O(N), and the order leaks timing information. With this,
+     * lookup is O(1) and we only run argon2 once per request (on the
+     * one candidate row).
+     */
+    public readonly lookupToken: string,
     public readonly role: AdminRole,
     public readonly createdAt: Date,
     public readonly createdBy: string,
@@ -43,6 +52,7 @@ export class AdminApiKey {
     name: string;
     plaintextToken: string;
     keyHash: string;
+    lookupToken: string;
     role: AdminRoleLiteral;
     createdBy: string;
     clock: Clock;
@@ -64,6 +74,7 @@ export class AdminApiKey {
       params.id,
       params.name.trim(),
       params.keyHash,
+      params.lookupToken,
       AdminRole.create(params.role),
       now,
       params.createdBy.trim(),
@@ -78,6 +89,7 @@ export class AdminApiKey {
     id: string;
     name: string;
     keyHash: string;
+    lookupToken: string;
     role: string;
     createdAt: Date;
     createdBy: string;
@@ -90,6 +102,7 @@ export class AdminApiKey {
       params.id,
       params.name,
       params.keyHash,
+      params.lookupToken,
       AdminRole.rehydrate(params.role),
       params.createdAt,
       params.createdBy,
@@ -106,6 +119,7 @@ export class AdminApiKey {
       this.id,
       this.name,
       this.keyHash,
+      this.lookupToken,
       this.role,
       this.createdAt,
       this.createdBy,
@@ -121,6 +135,7 @@ export class AdminApiKey {
       this.id,
       this.name,
       this.keyHash,
+      this.lookupToken,
       this.role,
       this.createdAt,
       this.createdBy,
