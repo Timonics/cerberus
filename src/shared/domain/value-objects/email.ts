@@ -55,8 +55,15 @@ export class Email {
       });
     }
 
-    // Conservative syntactic check. See class docstring.
-    const EMAIL_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
+    // Conservative syntactic check. Tighter than the previous regex:
+    //   * Local part: 1+ chars, no leading/trailing dot, no consecutive
+    //     dots, each char alphanumeric + _ . % + -.
+    //   * Domain: 1+ labels separated by dots, each label alphanumeric
+    //     + hyphens (no leading/trailing hyphen). Final label (TLD)
+    //     is 2-24 chars of letters only.
+    //   * Multi-segment TLDs allowed (.co.uk, .museum).
+    const EMAIL_RE =
+      /^[a-z0-9](?:[a-z0-9._%+-]*[a-z0-9])?@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}$/;
     if (!EMAIL_RE.test(normalized)) {
       throw new DomainError(
         'identity.email.invalid',

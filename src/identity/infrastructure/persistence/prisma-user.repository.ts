@@ -32,14 +32,22 @@ export class PrismaUserRepository extends UserRepository {
 
   public async findById(tx: Tx, id: UserId): Promise<User | null> {
     const client = tx as PrismaTx;
-    const row = await client.user.findUnique({ where: { id: id.value } });
+    // V1.5 (audit QA14): filter out soft-deleted users.
+    const row = await client.user.findFirst({
+      where: { id: id.value, deletedAt: null },
+    });
     return row ? this.toDomain(row) : null;
   }
 
   public async findByEmail(tx: Tx, email: string): Promise<User | null> {
     const client = tx as PrismaTx;
     const normalized = Email.create(email).value;
-    const row = await client.user.findUnique({ where: { email: normalized } });
+    // V1.5 (audit QA14): filter out soft-deleted users. Without this,
+    // a soft-deleted user could still log in because the only check
+    // was on `email` (UNIQUE on its own, doesn't include `deletedAt`).
+    const row = await client.user.findFirst({
+      where: { email: normalized, deletedAt: null },
+    });
     return row ? this.toDomain(row) : null;
   }
 

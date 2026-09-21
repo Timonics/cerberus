@@ -1,13 +1,13 @@
 {
   "info": {
-    "_postman_id": "cerberus-7usjsqyl4",
+    "_postman_id": "cerberus-p7fh80x4c",
     "name": "Cerberus",
     "description": "Full REST + GraphQL surface for the Cerberus auth service.\n\n**Setup**\n1. Import `Cerberus.dev.postman_environment.json`.\n2. Set `baseUrl` to your running server (default `http://localhost:3000`).\n3. Run `OAuth2 > POST /v1/oauth/token — password grant` — the test script auto-saves the bearer token into the env.\n\n**Conventions**\n- Every authenticated REST endpoint expects `Authorization: Bearer {{bearerToken}}`.\n- Phase-11 placeholder endpoints (change-password, MFA, audit-log/me, update-display-name) expect `Authorization: {{userId}}` instead.\n- TOTP codes are auto-computed by the prerequest script of `/mfa/confirm`, `/mfa/disable`, `/mfa/verify`, and the GraphQL MFA mutations.\n- GraphQL endpoints all hit `POST /graphql`; the request body is a `{query, variables}` envelope.\n- Error responses include `code` (REST) or `extensions.code` (GraphQL) with stable strings — switch on those in client code.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "id": "3flmouf1o",
+      "id": "1537d5d37",
       "name": "Health",
       "description": "",
       "item": [
@@ -78,12 +78,12 @@
       ]
     },
     {
-      "id": "04gyl8zrk",
+      "id": "17shan6e5",
       "name": "Auth",
       "description": "",
       "item": [
         {
-          "id": "c92ekpv2c",
+          "id": "6fdj4d49b",
           "name": "Public",
           "description": "",
           "item": [
@@ -264,7 +264,7 @@
           ]
         },
         {
-          "id": "2j2w7iftm",
+          "id": "acu0v6xks",
           "name": "Sessions (V1: Authorization placeholder)",
           "description": "",
           "item": [
@@ -383,7 +383,7 @@
       ]
     },
     {
-      "id": "60hyb4jc3",
+      "id": "4f1ljxbja",
       "name": "OAuth2 (RFC 6749 / 7662 / 7009)",
       "description": "",
       "item": [
@@ -690,12 +690,12 @@
       ]
     },
     {
-      "id": "h9fq534ln",
+      "id": "kl18q8w8g",
       "name": "Identity",
       "description": "",
       "item": [
         {
-          "id": "9k6tle6g7",
+          "id": "hubtsihi2",
           "name": "Public",
           "description": "",
           "item": [
@@ -758,7 +758,7 @@
           ]
         },
         {
-          "id": "vrjy2lsox",
+          "id": "cxrbnsymc",
           "name": "Authenticated (Bearer JWT — V1.5)",
           "description": "",
           "item": [
@@ -1245,12 +1245,12 @@
       ]
     },
     {
-      "id": "wmhuqxt8x",
+      "id": "41mft5hkj",
       "name": "Engagement",
       "description": "",
       "item": [
         {
-          "id": "rornh8wbo",
+          "id": "uabus9emk",
           "name": "Public",
           "description": "",
           "item": [
@@ -1411,7 +1411,7 @@
           ]
         },
         {
-          "id": "welkbilpw",
+          "id": "glvkrv1l5",
           "name": "Authenticated",
           "description": "",
           "item": [
@@ -1505,7 +1505,7 @@
       ]
     },
     {
-      "id": "w82mafqx6",
+      "id": "eksminyfo",
       "name": "GraphQL (POST /graphql)",
       "description": "",
       "item": [
@@ -2246,12 +2246,12 @@
       ]
     },
     {
-      "id": "no5xobl7v",
+      "id": "07iqv4wmh",
       "name": "Examples — chained flows",
       "description": "",
       "item": [
         {
-          "id": "61igdj0rf",
+          "id": "vj7vwio8m",
           "name": "1. New user happy path",
           "description": "",
           "item": [
@@ -2466,7 +2466,7 @@
           ]
         },
         {
-          "id": "psk6eb8e5",
+          "id": "qae6f2nlq",
           "name": "2. Password reset flow",
           "description": "",
           "item": [

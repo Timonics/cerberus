@@ -1,6 +1,30 @@
 import { DomainError } from '../../../shared/domain/errors/domain-error';
 
 /**
+ * Slugs that would collide with HTTP routes or future operator
+ * surfaces. Kept short — the list only grows when a new reserved
+ * path is added.
+ */
+const RESERVED_SLUGS: ReadonlySet<string> = new Set([
+  'admin',
+  'api',
+  'new',
+  'me',
+  'www',
+  'static',
+  'assets',
+  'help',
+  'support',
+  'root',
+  'auth',
+  'graphql',
+  'login',
+  'logout',
+  'signup',
+  'docs',
+]);
+
+/**
  * Organization slug value object.
  *
  * A slug is a URL-safe identifier for an Organization (e.g. "acme-corp").
@@ -8,7 +32,9 @@ import { DomainError } from '../../../shared/domain/errors/domain-error';
  * UUID — much easier to read in production logs.
  *
  * Format: lowercase letters, digits, and hyphens. Length 3–63. Cannot
- * start or end with a hyphen.
+ * start or end with a hyphen. Cannot be a reserved word (would collide
+ * with HTTP routes — e.g. an org with slug "admin" would shadow
+ * /admin/docs).
  */
 export class OrgSlug {
   public readonly value: string;
@@ -37,6 +63,12 @@ export class OrgSlug {
       throw new DomainError(
         'domain.invariant_violation',
         'OrgSlug may only contain lowercase letters, digits, and hyphens, and cannot start or end with a hyphen',
+      );
+    }
+    if (RESERVED_SLUGS.has(normalized)) {
+      throw new DomainError(
+        'domain.invariant_violation',
+        `OrgSlug "${normalized}" is reserved`,
       );
     }
 

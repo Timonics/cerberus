@@ -48,33 +48,63 @@ export class Password {
       );
     }
 
-    if (raw.length < 12) {
+    // V1.5 (audit QA3): trim leading/trailing whitespace so that
+    // '  password123!' and 'password123!' are treated identically
+    // (otherwise users may hit different hash outputs depending on
+    // whether their password manager adds a trailing space). Use
+    // Unicode-aware trim + codepoint counting so emoji-length
+    // passwords are not unfairly rejected.
+    const trimmed = raw.normalize('NFKC').trim();
+
+    // Codepoint count (not UTF-16 code units). Spread iterates
+    // code points, so [...trimmed].length gives the user-visible
+    // length. A 12-codepoint password is the minimum.
+    const codepointLength = [...trimmed].length;
+
+    if (codepointLength < 12) {
       throw new DomainError(
         'identity.password.too_weak',
         'Password must be at least 12 characters',
-        { length: raw.length },
+        { length: codepointLength },
       );
     }
 
-    if (raw.length > 128) {
+    if (codepointLength > 128) {
       throw new DomainError(
         'identity.password.too_weak',
         'Password must be at most 128 characters',
-        { length: raw.length },
+        { length: codepointLength },
       );
     }
 
-    // Composition check — reject passwords that are all-lowercase, all-digits,
-    // or repeated characters. The k-anonymity breach check is layered on top
-    // at the use-case level (it requires an external service).
-    if (/^[a-z]+$/.test(raw) || /^\d+$/.test(raw)) {
+    // Composition check — reject passwords that are all-lowercase, all-uppercase,
+    // all-digits, all-symbols, or too short. The k-anonymity breach check is
+    // layered on top at the use-case level (it requires an external service).
+    if (
+      /^[a-z]+$/.test(trimmed) ||
+      /^[A-Z]+$/.test(trimmed) ||
+      /^\d+$/.test(trimmed) ||
+      /^[^a-zA-Z0-9]+$/.test(trimmed)
+    ) {
       throw new DomainError(
         'identity.password.too_weak',
-        'Password must contain a mix of letters, digits, and symbols',
+        'Password must contain at least one lowercase letter, one uppercase letter or symbol, and one digit',
+      );
+    }
+    if (!/[a-z]/.test(trimmed)) {
+      throw new DomainError(
+        'identity.password.too_weak',
+        'Password must contain at least one lowercase letter',
+      );
+    }
+    if (!/\d/.test(trimmed)) {
+      throw new DomainError(
+        'identity.password.too_weak',
+        'Password must contain at least one digit',
       );
     }
 
-    return new Password(raw);
+    return new Password(trimmed);
   }
 
   /**
