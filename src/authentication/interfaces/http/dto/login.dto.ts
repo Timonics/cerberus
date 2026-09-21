@@ -1,13 +1,14 @@
-import {
-  IsEmail,
-  IsOptional,
-  IsString,
-  Length,
-  Matches,
-} from 'class-validator';
+import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 
 /**
  * Request body for `POST /v1/auth/login`.
+ *
+ * V1.5 (audit M3): removed the user-controlled `ipAddress` field.
+ * Previously a client could send `{"ipAddress": "0.0.0.0"}` in the
+ * body, which the use-case used to key the lockout window — letting
+ * an attacker bypass per-IP lockout by claiming every request came
+ * from a single IP. The controller now uses the server-derived
+ * `@Ip()` decorator (which honors `app.set('trust proxy', ...)`).
  */
 export class LoginDto {
   @IsEmail({}, { message: 'email must be a valid email address' })
@@ -22,17 +23,4 @@ export class LoginDto {
   @IsString()
   @Length(1, 1024)
   public userAgent?: string;
-
-  /**
-   * Optional. The IP address for the session record + lockout keying.
-   * In practice this comes from the request (we use the upstream proxy's
-   * `X-Forwarded-For` if present, else the socket peer).
-   */
-  @IsOptional()
-  @IsString()
-  @Matches(/^[0-9a-fA-F.:]+$/, {
-    message: 'ipAddress contains invalid characters',
-  })
-  @Length(1, 64)
-  public ipAddress?: string;
 }

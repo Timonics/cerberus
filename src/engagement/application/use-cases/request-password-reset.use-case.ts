@@ -28,23 +28,17 @@ export interface RequestPasswordResetInput {
   email: string;
 }
 
-export interface RequestPasswordResetResult {
-  /** The plaintext token (returned exactly once). Empty string if the email is unknown. */
-  token: string;
-  expiresAt: Date | null;
-}
-
 /**
  * Request a password-reset token.
  *
- * Looks up the user by email. If the user exists, generates a fresh
- * token and persists the hash. If the user does NOT exist, returns an
- * empty token (no token created). The HTTP status code is the same in
- * both cases (200/204) so we don't leak account existence.
+ * V1.5 (audit M5): the use-case no longer returns the plaintext token
+ * in the result. The token travels via the `PasswordResetRequested`
+ * event → mail-sender dispatcher → email. Returning it in the result
+ * kept the plaintext alive in memory longer than necessary, and a
+ * future caller could accidentally include it in a structured log.
  *
- * Per your explicit requirement, password reset requires email
- * confirmation — this endpoint issues the token; `ConfirmPasswordReset`
- * validates it and rotates the password.
+ * The HTTP response is always 204 regardless of whether the email
+ * exists (no account enumeration).
  */
 @Injectable()
 export class RequestPasswordResetUseCase {
@@ -62,9 +56,7 @@ export class RequestPasswordResetUseCase {
     private readonly tokenService: Sha256TokenService,
   ) {}
 
-  public async execute(
-    input: RequestPasswordResetInput,
-  ): Promise<RequestPasswordResetResult> {
+  public async execute(input: RequestPasswordResetInput): Promise<void> {
     const email = Email.create(input.email);
     const plaintext = this.tokenService.generatePlaintext();
     const tokenHash = this.tokenService.hash(plaintext);
@@ -94,7 +86,12 @@ export class RequestPasswordResetUseCase {
     });
 
     if (!result.user || !result.reset) {
-      return { token: '', expiresAt: null };
+      // V1.5 (audit M6): equalize timing — the user-presented branch
+      // computes an HMAC (see below). Doing the same on the unknown-
+      // email branch means an attacker can't distinguish "no such
+      // user" from "user exists" by response-time alone.
+      this.tokenService.hash('equalize-timing-noop-' + email.value);
+      return;
     }
 
     await this.eventBus.publishAll([
@@ -106,10 +103,5 @@ export class RequestPasswordResetUseCase {
         plaintext,
       ),
     ]);
-
-    return {
-      token: plaintext,
-      expiresAt: result.reset.expiresAt,
-    };
   }
 }

@@ -90,7 +90,7 @@ export class AuthController {
       email: body.email,
       password: body.password,
       userAgent: body.userAgent,
-      ipAddress: body.ipAddress ?? ip,
+      ipAddress: ip,
       appDefaultOrgSlug,
     });
     // V1.5: also issue an access token JWT so the client can call

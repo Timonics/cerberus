@@ -17,7 +17,10 @@ import { Email } from '../../../shared/domain/value-objects/email';
 import { Credential } from '../../../identity/domain/aggregates/credential';
 import { User } from '../../../identity/domain/aggregates/user';
 import { UserId } from '../../../identity/domain/value-objects/user-id';
-import { VerifySecondFactorUseCase } from '../../../identity/application/use-cases/verify-second-factor.use-case';
+import {
+  MfaSecretRepository,
+  MFA_SECRET_REPOSITORY,
+} from '../../../identity/domain/ports/mfa-secret.repository.port';
 import {
   CREDENTIAL_REPOSITORY,
   CredentialRepository,
@@ -134,7 +137,8 @@ export class LoginUseCase {
     private readonly refreshTokenGen: RefreshTokenGenerator,
     private readonly lockoutPolicy: LockoutPolicy,
     private readonly recordAuditEventUc: RecordAuditEventUseCase,
-    private readonly verifySecondFactorUc: VerifySecondFactorUseCase,
+    @Inject(MFA_SECRET_REPOSITORY)
+    private readonly mfaSecretRepo: MfaSecretRepository,
   ) {}
 
   public async execute(input: LoginInput): Promise<LoginResult> {
@@ -323,31 +327,23 @@ export class LoginUseCase {
   }
 
   /**
-   * Probe whether the user has MFA enabled. We don't trust `requiresMfa`
-   * in the persisted Credential aggregate — that field isn't there.
-   * Instead we re-use `VerifySecondFactorUseCase`'s read path via the
-   * MfaSecretRepository (it doesn't perform a verification, just loads).
+   * Probe whether the user has MFA enabled.
+   *
+   * V1.5 (audit M7): the previous implementation called
+   * `verifySecondFactorUc.execute({ code: '000000' })` and used whether
+   * it threw `identity.mfa.not_enabled` as the success/failure signal.
+   * That's exception-as-control-flow — bad pattern. Real errors (DB
+   * down, malformed secret, etc.) silently meant "MFA is enabled".
+   *
+   * We now inject `MfaSecretRepository` directly and check the row's
+   * `status` field. No exceptions, no incidental coupling to the
+   * verifier use-case.
    */
   private async requiresMfa(userId: UserId): Promise<boolean> {
-    // The VerifySecondFactorUseCase needs a code; we don't want to call it
-    // here. Instead, just probe via the underlying repo by trying to verify
-    // a dummy 6-digit code — this returns `false` if no MFA is enrolled.
-    try {
-      await this.verifySecondFactorUc.execute({
-        userId: userId.value,
-        code: '000000',
-      });
-      return true;
-    } catch (err) {
-      if (
-        err instanceof DomainError &&
-        err.code === 'identity.mfa.not_enabled'
-      ) {
-        return false;
-      }
-      // Other errors (invalid code, etc.) imply MFA IS enabled.
-      return true;
-    }
+    const secret = await this.txRunner.run(async (tx) =>
+      this.mfaSecretRepo.findById(tx, userId),
+    );
+    return secret !== null && secret.confirmed;
   }
 
   /**
