@@ -1,6 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { AuthenticationModule } from '../authentication/authentication.module';
 import { JwtSignerService } from './infrastructure/crypto/jwt-signer.service';
+import { JwtAuthGuard } from './interfaces/security/jwt-auth.guard';
+import { ScopesGuard } from './interfaces/security/scopes.guard';
 import { JoseRsaKeyPairGenerator } from './infrastructure/crypto/jose-rsa-key-pair-generator';
 import { PrismaSigningKeyRepository } from './infrastructure/persistence/prisma-signing-key.repository';
 import { GetJwksUseCase } from './application/use-cases/get-jwks.use-case';
@@ -51,6 +53,10 @@ import { AuthorizationResolver } from './interfaces/graphql/authorization.resolv
     GetJwksUseCase,
     RotateSigningKeyUseCase,
 
+    // Guards (V1.5)
+    JwtAuthGuard,
+    ScopesGuard,
+
     // GraphQL resolver
     AuthorizationResolver,
   ],
@@ -61,6 +67,8 @@ import { AuthorizationResolver } from './interfaces/graphql/authorization.resolv
     JwtSignerService,
     RotateSigningKeyUseCase,
     SIGNING_KEY_REPOSITORY,
+    JwtAuthGuard,
+    ScopesGuard,
   ],
 })
 export class AuthorizationModule {}

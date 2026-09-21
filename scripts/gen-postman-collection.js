@@ -254,16 +254,16 @@ const authFolder = folder('Auth', [
       tests: STANDARD_TESTS,
     }),
   ]),
-  folder('Sessions (V1: X-User-Id placeholder)', [
+  folder('Sessions (V1: Authorization placeholder)', [
     req('GET /v1/auth/sessions', {
       method: 'GET',
       path: '/v1/auth/sessions',
       description:
         'List all active sessions for the authenticated user. ' +
-        'V1 uses the Phase-11 X-User-Id placeholder header (Phase 13 ' +
+        'V1 uses the Phase-11 Authorization placeholder header (Phase 13 ' +
         'JWT auth replaces this). Both headers are sent for clarity.',
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Authorization', value: 'Bearer {{bearerToken}}' },
       ],
       tests: REQUIRE_AUTH,
@@ -273,9 +273,9 @@ const authFolder = folder('Auth', [
       path: '/v1/auth/sessions/{{otherSessionId}}/revoke',
       description:
         'Revoke a specific session. Must be your own session ' +
-        '(cross-user revoke returns 404). V1 uses X-User-Id.',
+        '(cross-user revoke returns 404). V1 uses Authorization.',
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Authorization', value: 'Bearer {{bearerToken}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
@@ -382,16 +382,16 @@ const identityFolder = folder('Identity', [
         }, null, 2),
         options: { language: { json: {} } },
       },
-      tests: `${STANDARD_TESTS}\npm.collectionVariables.set("userId", pm.response.json().userId);\npm.collectionVariables.set("organizationSlug", pm.response.json().organizationSlug);`,
+      tests: `${STANDARD_TESTS}\npm.collectionVariables.set("userId", pm.response.json().userId);\npm.collectionVariables.set("organizationSlug", pm.response.json().organizationSlug);\npm.collectionVariables.set("accessToken", pm.response.json().accessToken);\npm.collectionVariables.set("refreshToken", pm.response.json().refreshToken);`,
     }),
   ]),
-  folder('Authenticated (X-User-Id placeholder)', [
+  folder('Authenticated (Bearer JWT — V1.5)', [
     req('POST /v1/identity/change-password', {
       method: 'POST',
       path: '/v1/identity/change-password',
       description: "Change the authenticated user's password. Emits identity.password.changed — all sessions are revoked.",
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: {
@@ -409,7 +409,7 @@ const identityFolder = folder('Identity', [
       path: '/v1/identity/me',
       description: "Update the authenticated user's display name.",
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: {
@@ -424,7 +424,7 @@ const identityFolder = folder('Identity', [
       path: '/v1/identity/me',
       description: 'Remove the display name.',
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: {
@@ -439,7 +439,7 @@ const identityFolder = folder('Identity', [
       path: '/v1/identity/mfa/enable',
       description: 'Begin MFA enrollment. Returns the TOTP secret and 10 recovery codes (returned ONCE).',
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: { mode: 'raw', raw: '{}', options: { language: { json: {} } } },
@@ -450,7 +450,7 @@ const identityFolder = folder('Identity', [
       path: '/v1/identity/mfa/confirm',
       description: 'Confirm MFA enrollment with a 6-digit TOTP code. The prerequest script computes the TOTP from {{mfaSecret}}.',
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: {
@@ -466,7 +466,7 @@ const identityFolder = folder('Identity', [
       path: '/v1/identity/mfa/disable',
       description: 'Disable MFA. Requires a valid TOTP code.',
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: {
@@ -482,7 +482,7 @@ const identityFolder = folder('Identity', [
       path: '/v1/identity/mfa/verify',
       description: 'Verify a TOTP or recovery code. Returns {matched: "totp" | "recovery"}.',
       headers: [
-        { key: 'X-User-Id', value: '{{userId}}' },
+        { key: 'Authorization', value: '{{userId}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: {
@@ -543,14 +543,14 @@ const engagementFolder = folder('Engagement', [
       method: 'POST',
       path: '/v1/engagement/email-verification/request',
       description: 'Request a fresh verification token for the calling user.',
-      headers: [{ key: 'X-User-Id', value: '{{userId}}' }],
+      headers: [{ key: 'Authorization', value: '{{userId}}' }],
       tests: 'pm.test("Status 204", () => pm.expect(pm.response.code).to.eql(204));',
     }),
     req('GET /v1/engagement/audit-log/me', {
       method: 'GET',
       path: '/v1/engagement/audit-log/me',
       description: "The authenticated user's own audit log.",
-      headers: [{ key: 'X-User-Id', value: '{{userId}}' }],
+      headers: [{ key: 'Authorization', value: '{{userId}}' }],
       tests: STANDARD_TESTS,
     }),
   ]),
@@ -804,7 +804,7 @@ const collection = {
       '3. Run `OAuth2 > POST /v1/oauth/token — password grant` — the test script auto-saves the bearer token into the env.\n\n' +
       '**Conventions**\n' +
       '- Every authenticated REST endpoint expects `Authorization: Bearer {{bearerToken}}`.\n' +
-      '- Phase-11 placeholder endpoints (change-password, MFA, audit-log/me, update-display-name) expect `X-User-Id: {{userId}}` instead.\n' +
+      '- Phase-11 placeholder endpoints (change-password, MFA, audit-log/me, update-display-name) expect `Authorization: {{userId}}` instead.\n' +
       '- TOTP codes are auto-computed by the prerequest script of `/mfa/confirm`, `/mfa/disable`, `/mfa/verify`, and the GraphQL MFA mutations.\n' +
       '- GraphQL endpoints all hit `POST /graphql`; the request body is a `{query, variables}` envelope.\n' +
       '- Error responses include `code` (REST) or `extensions.code` (GraphQL) with stable strings — switch on those in client code.',

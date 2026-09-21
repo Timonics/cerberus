@@ -11,6 +11,7 @@ import {
   ADMIN_API_KEY_REPOSITORY,
   AdminApiKeyRepository,
 } from '../../domain/ports/admin-api-key.repository.port';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
 @Injectable()
 export class RevokeAdminApiKeyUseCase {
@@ -19,10 +20,11 @@ export class RevokeAdminApiKeyUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ADMIN_API_KEY_REPOSITORY)
     private readonly repo: AdminApiKeyRepository,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(keyId: string): Promise<void> {
-    await this.txRunner.run<void>(async (tx: Tx) => {
+    const revoked = await this.txRunner.run<boolean>(async (tx: Tx) => {
       const existing = await this.repo.findById(tx, keyId);
       if (!existing) {
         throw new DomainError(
@@ -32,10 +34,18 @@ export class RevokeAdminApiKeyUseCase {
         );
       }
       if (existing.revokedAt !== null) {
-        return; // idempotent
+        return false; // already revoked (idempotent)
       }
-      const revoked = existing.revoke(this.clock);
-      await this.repo.save(tx, revoked);
+      const updated = existing.revoke(this.clock);
+      await this.repo.save(tx, updated);
+      return true;
     });
+    if (revoked) {
+      await this.recordAuditEventUc.execute({
+        userId: null,
+        eventType: 'admin.api_key.revoked',
+        payload: { keyId },
+      });
+    }
   }
 }

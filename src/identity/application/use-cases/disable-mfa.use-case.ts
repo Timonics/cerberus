@@ -11,6 +11,7 @@ import {
   TransactionRunner,
 } from '../../../shared/domain';
 import { UserId } from '../../domain/value-objects/user-id';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
   MFA_SECRET_REPOSITORY,
   MfaSecretRepository,
@@ -36,6 +37,7 @@ export class DisableMfaUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
     @Inject(MFA_SECRET_REPOSITORY)
     private readonly mfaRepo: MfaSecretRepository,
     private readonly totp: TotpService,
@@ -72,5 +74,12 @@ export class DisableMfaUseCase {
     });
 
     await this.eventBus.publishAll(events);
+
+    // Audit: identity.mfa.disabled.
+    await this.recordAuditEventUc.execute({
+      userId: input.userId,
+      eventType: 'identity.mfa.disabled',
+      payload: { actor: 'self' },
+    });
   }
 }

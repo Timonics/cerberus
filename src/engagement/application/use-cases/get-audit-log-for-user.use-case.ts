@@ -19,6 +19,8 @@ export interface GetAuditLogForUserInput {
 export interface AuditLogEntry {
   id: string;
   eventType: string;
+  /** V1.5: this was missing — added so GraphQL resolvers can show who the event is attributed to. */
+  userId: string | null;
   payload: Readonly<Record<string, unknown>>;
   ipAddress: string | null;
   userAgent: string | null;
@@ -53,6 +55,7 @@ export class GetAuditLogForUserUseCase {
         entries: rows.map((row: AuditLog) => ({
           id: row.id,
           eventType: row.eventType.value,
+          userId: row.userId,
           payload: row.payload,
           ipAddress: row.ipAddress,
           userAgent: row.userAgent,

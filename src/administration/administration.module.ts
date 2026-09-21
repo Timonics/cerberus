@@ -25,6 +25,7 @@ import { ADMIN_API_KEY_REPOSITORY } from './domain/ports/admin-api-key.repositor
 import { AdminController } from './interfaces/http/admin.controller';
 import { AdminHealthController } from './interfaces/http/admin-health.controller';
 import { AdminApiKeyGuard } from './interfaces/security/admin-api-key.guard';
+import { AdminGraphqlResolver } from './interfaces/graphql/admin.resolver';
 import { IpAllowlistGuard } from './interfaces/security/ip-allowlist.guard';
 
 /**
@@ -113,6 +114,12 @@ export const ADMIN_IP_ALLOWLIST = Symbol('ADMIN_IP_ALLOWLIST');
     AdminDisableUserMfaUseCase,
     AdminSearchAuditLogUseCase,
 
+    // GraphQL resolver (V1.5) — exposed via the public app's
+    // `/graphql` endpoint with `org:admin` scope requirement. The
+    // admin REST listener (port 3001) does NOT mount `/graphql` —
+    // admin GraphQL is interactive-admin only.
+    AdminGraphqlResolver,
+
     // Global error filter — same as the public app so REST + GraphQL
     // (if added later) return stable error codes.
     {
@@ -120,6 +127,11 @@ export const ADMIN_IP_ALLOWLIST = Symbol('ADMIN_IP_ALLOWLIST');
       useClass: DomainErrorFilter,
     },
   ],
-  exports: [AdminApiKeyHasher, ADMIN_API_KEY_HASHER, ADMIN_API_KEY_REPOSITORY],
+  exports: [
+    AdminApiKeyHasher,
+    ADMIN_API_KEY_HASHER,
+    ADMIN_API_KEY_REPOSITORY,
+    AdminGraphqlResolver,
+  ],
 })
 export class AdminModule {}

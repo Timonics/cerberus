@@ -10,12 +10,12 @@ import {
 } from '../../../shared/domain';
 import { App, generateAppApiKeyPlaintext } from '../../domain/aggregates/app';
 import { AppApiKey } from '../../domain/aggregates/app-api-key';
+import { Argon2AppApiKeyHasher } from '../../infrastructure/security/argon2-app-api-key.hasher';
 import {
   APP_REPOSITORY,
   AppRepository,
 } from '../../domain/ports/app.repository.port';
-import { Argon2AppApiKeyHasher } from '../../infrastructure/security/argon2-app-api-key.hasher';
-
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 export interface RegisterAppInput {
   name: string;
   description?: string;
@@ -52,6 +52,7 @@ export class RegisterAppUseCase {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(APP_REPOSITORY) private readonly repo: AppRepository,
     private readonly hasher: Argon2AppApiKeyHasher,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(input: RegisterAppInput): Promise<RegisterAppResult> {
@@ -81,6 +82,18 @@ export class RegisterAppUseCase {
         initialKey,
       });
       return this.repo.save(tx, a);
+    });
+
+    // Audit: apps.app.registered. V1 doesn't bind apps to a user, so
+    // userId is null — admin audit search by event type still works.
+    await this.recordAuditEventUc.execute({
+      userId: null,
+      eventType: 'apps.app.registered',
+      payload: {
+        appId: app.id,
+        name: app.name,
+        defaultOrgSlug: app.defaultOrgSlug,
+      },
     });
 
     return { app, plaintextApiKey: plaintextToken };

@@ -2,11 +2,13 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Post,
   Res,
 } from '@nestjs/common';
+import { Public } from '../security/public.decorator';
 import { Response } from 'express';
 import { GetJwksUseCase } from '../../application/use-cases/get-jwks.use-case';
 import { IntrospectTokenUseCase } from '../../application/use-cases/introspect-token.use-case';
@@ -16,6 +18,7 @@ import { RefreshTokenGrantUseCase } from '../../application/use-cases/refresh-to
 import { RevokeTokenUseCase } from '../../application/use-cases/revoke-token.use-case';
 import { TokenInspectDto } from './dto/token-inspect.dto';
 import { TokenRequestDto } from './dto/token-request.dto';
+import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/verify-app-api-key.use-case';
 
 /**
  * Authorization HTTP controller.
@@ -52,11 +55,35 @@ export class OAuthController {
     private readonly revokeUc: RevokeTokenUseCase,
     private readonly getJwksUc: GetJwksUseCase,
     private readonly loginUc: LoginUseCase,
+    private readonly verifyAppApiKeyUc: VerifyAppApiKeyUseCase,
   ) {}
 
+  /**
+   * Pull the app's `defaultOrgSlug` from the request headers, if
+   * present. Mirrors the helper in `AuthController`.
+   */
+  private async appDefaultOrgSlug(
+    appId: string | undefined,
+    appSecret: string | undefined,
+  ): Promise<string | null> {
+    if (!appId || !appSecret) return null;
+    const verified = await this.verifyAppApiKeyUc.execute({
+      appId: appId.trim(),
+      plaintextApiKey: appSecret.trim(),
+    });
+    return verified?.defaultOrgSlug ?? null;
+  }
+
+  @Public()
   @Post('token')
   @HttpCode(HttpStatus.OK)
-  public async token(@Body() body: TokenRequestDto, @Res() res: Response) {
+  public async token(
+    @Body() body: TokenRequestDto,
+    @Res() res: Response,
+    @Headers('x-cerberus-app-id') appId?: string,
+    @Headers('x-cerberus-app-secret') appSecret?: string,
+  ) {
+    const appDefaultOrgSlug = await this.appDefaultOrgSlug(appId, appSecret);
     if (body.grant_type === 'password') {
       if (!body.username || !body.password) {
         res.status(HttpStatus.BAD_REQUEST).json({
@@ -68,13 +95,17 @@ export class OAuthController {
       }
       // V1: use the Authentication context's LoginUseCase to mint a
       // session, then immediately issue an access token from the
-      // session's user.
+      // session's user. V1.5: pass appDefaultOrgSlug so the session
+      // (and therefore the access token) is scoped to the bound org.
       const loginResult = await this.loginUc.execute({
         email: body.username,
         password: body.password,
+        appDefaultOrgSlug,
       });
       const issued = await this.issueAccessTokenUc.execute({
         userId: loginResult.userId,
+        organizationSlug:
+          loginResult.organizationId ?? appDefaultOrgSlug ?? null,
       });
       res.json({
         access_token: issued.accessToken,
@@ -97,6 +128,7 @@ export class OAuthController {
       }
       const refreshed = await this.refreshTokenGrantUc.execute({
         refreshToken: body.refresh_token,
+        organizationSlug: appDefaultOrgSlug,
       });
       res.json({
         access_token: refreshed.accessToken,
@@ -113,6 +145,7 @@ export class OAuthController {
     });
   }
 
+  @Public()
   @Post('introspect')
   @HttpCode(HttpStatus.OK)
   public async introspect(@Body() body: TokenInspectDto) {
@@ -122,6 +155,7 @@ export class OAuthController {
     });
   }
 
+  @Public()
   @Post('revoke')
   @HttpCode(HttpStatus.OK)
   public async revoke(@Body() body: TokenInspectDto): Promise<void> {
@@ -141,6 +175,7 @@ export class OAuthController {
 export class JwksController {
   public constructor(private readonly getJwksUc: GetJwksUseCase) {}
 
+  @Public()
   @Get('jwks.json')
   public async jwks() {
     return this.getJwksUc.execute(new Date());

@@ -12,6 +12,7 @@ import { RegisterAppDto, RotateAppApiKeyDto } from './dto/apps.dto';
 import { RegisterAppUseCase } from '../../application/use-cases/register-app.use-case';
 import { RotateAppApiKeyUseCase } from '../../application/use-cases/rotate-app-api-key.use-case';
 import { RevokeAppUseCase } from '../../application/use-cases/revoke-app.use-case';
+import { Public } from '../../../authorization/interfaces/security/public.decorator';
 
 /**
  * App registration + key-rotation endpoints (public surface).
@@ -28,6 +29,7 @@ export class AppsController {
     private readonly revokeAppUc: RevokeAppUseCase,
   ) {}
 
+  @Public()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   public async register(@Body() body: RegisterAppDto) {
@@ -54,6 +56,7 @@ export class AppsController {
     };
   }
 
+  @Public()
   @Patch(':id/rotate-key')
   @HttpCode(HttpStatus.OK)
   public async rotateKey(
@@ -70,6 +73,7 @@ export class AppsController {
     };
   }
 
+  @Public()
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async revoke(@Param('id') id: string): Promise<void> {

@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { AuthorizationModule } from '../authorization/authorization.module';
 import { Argon2PasswordHasher } from './infrastructure/security/argon2-password-hasher';
 import { PrismaCredentialRepository } from './infrastructure/persistence/prisma-credential.repository';
 import { PrismaMembershipRepository } from './infrastructure/persistence/prisma-membership.repository';
@@ -42,7 +43,14 @@ import { AppsModule } from '../apps/apps.module';
  */
 @Global()
 @Module({
-  imports: [AppsModule],
+  // AuthorizationModule is imported (despite also being @Global) so
+  // that `JwtAuthGuard` — used by IdentityController via @UseGuards
+  // — has its `JwtSignerService` dep resolved within IdentityModule's
+  // DI tree. Without the explicit import, guards-injected deps that
+  // are @Global() can fail to resolve when the controller's module
+  // (IdentityModule) doesn't import the guard's owning module
+  // (AuthorizationModule). V1.5 fix.
+  imports: [AppsModule, AuthorizationModule],
   controllers: [IdentityController],
   providers: [
     // Infrastructure

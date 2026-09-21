@@ -94,15 +94,16 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'admin.api_key.not_found':
       case 'app.auth.missing':
       case 'app.auth.invalid':
-      case 'app.not_found':
-      case 'app.api_key.not_found':
       case 'app.api_key.revoked':
       case 'app.api_key.expired':
-      case 'app.organization.not_found':
+      case 'app.api_key.not_found':
+      case 'app.api_key.invalid':
+      case 'authentication.token.missing':
         return HttpStatus.UNAUTHORIZED;
 
       case 'admin.ip_not_allowed':
       case 'app.revoked':
+      case 'authentication.app_membership_required':
         return HttpStatus.FORBIDDEN;
 
       case 'admin.audit.search.too_broad':
@@ -115,6 +116,8 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'identity.user.not_found':
       case 'identity.mfa.not_enabled':
       case 'admin.user.mfa_not_enabled':
+      case 'app.not_found':
+      case 'app.organization.not_found':
         return HttpStatus.NOT_FOUND;
 
       // 409 — conflict

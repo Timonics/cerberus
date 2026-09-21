@@ -28,6 +28,18 @@ export const AUDIT_EVENT_TYPES = [
   'engagement.email_verification.completed',
   'engagement.password_reset.requested',
   'engagement.password_reset.completed',
+  // Administration (V1.5+)
+  'admin.api_key.issued',
+  'admin.api_key.revoked',
+  'admin.user.mfa_disabled',
+  'admin.audit.searched',
+  // Apps (V1.5+)
+  'apps.app.registered',
+  'apps.app.key_rotated',
+  'apps.app.revoked',
+  // Authorization
+  'authorization.token.minted',
+  'authorization.token.revoked',
 ] as const;
 
 export type AuditEventTypeLiteral = (typeof AUDIT_EVENT_TYPES)[number];

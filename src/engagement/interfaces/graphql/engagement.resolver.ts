@@ -1,11 +1,7 @@
 import { Inject } from '@nestjs/common';
 import { Args, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { AuthGuard } from '../../../graphql/guards/auth-guard.decorator';
-import {
-  CurrentUser,
-  IpAddress,
-  UserAgent,
-} from '../../../graphql/graphql-context';
+import { CurrentUser } from '../../../graphql/graphql-context';
 import { ConfirmEmailVerificationUseCase } from '../../application/use-cases/confirm-email-verification.use-case';
 import { GetAuditLogForUserUseCase } from '../../application/use-cases/get-audit-log-for-user.use-case';
 import { RequestEmailVerificationUseCase } from '../../application/use-cases/request-email-verification.use-case';
@@ -22,6 +18,9 @@ import {
  *
  * Mirrors the REST `EngagementController`. All routes delegate to the
  * same use-cases.
+ *
+ * V1.5 fix: `requestEmailVerification` is now JWT-gated (was open in
+ * V1). `myAuditLog` returns `[AuditLogEntry!]!` (was `AuditLogPage`).
  */
 @Resolver()
 export class EngagementResolver {
@@ -87,26 +86,28 @@ export class EngagementResolver {
   }
 
   @AuthGuard()
-  @Query(() => 'AuditLogPage', {
+  @Query(() => '[AuditLogEntry!]!', {
+    name: 'auditLogMe',
     description:
       "The authenticated user's own audit log, most recent first. Limit is bounded server-side to 1–500.",
   })
   public async myAuditLog(
     @CurrentUser() user: { sub: string },
     @Args('limit', { type: () => Int, defaultValue: 100 }) limit: number,
-    @IpAddress() ipAddress: string | undefined,
-    @UserAgent() userAgent: string | undefined,
-  ) {
+  ): Promise<unknown[]> {
     const boundedLimit = Math.min(Math.max(limit, 1), 500);
     const result = await this.getAuditLogUc.execute({
       userId: user.sub,
       limit: boundedLimit,
     });
-    return {
-      entries: result.entries,
-      total: result.entries.length,
-      ipAddress: ipAddress ?? null,
-      userAgent: userAgent ?? null,
-    };
+    return result.entries.map((e) => ({
+      id: e.id,
+      eventType: e.eventType,
+      userId: e.userId,
+      payload: JSON.stringify(e.payload),
+      ipAddress: e.ipAddress,
+      userAgent: e.userAgent,
+      occurredAt: e.createdAt.toISOString(),
+    }));
   }
 }

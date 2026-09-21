@@ -2,10 +2,10 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   HttpCode,
   HttpStatus,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { ConfirmEmailVerificationUseCase } from '../../application/use-cases/confirm-email-verification.use-case';
 import { ConfirmPasswordResetUseCase } from '../../application/use-cases/confirm-password-reset.use-case';
@@ -15,6 +15,12 @@ import { RequestPasswordResetUseCase } from '../../application/use-cases/request
 import { EmailVerificationConfirmDto } from './dto/email-verification-confirm.dto';
 import { PasswordResetConfirmDto } from './dto/password-reset-confirm.dto';
 import { PasswordResetRequestDto } from './dto/password-reset-request.dto';
+import { Public } from '../../../authorization/interfaces/security/public.decorator';
+import { CurrentUser } from '../../../authorization/interfaces/security/current-user.decorator';
+import { Scopes } from '../../../authorization/interfaces/security/scopes.decorator';
+import { JwtAuthGuard } from '../../../authorization/interfaces/security/jwt-auth.guard';
+import { ScopesGuard } from '../../../authorization/interfaces/security/scopes.guard';
+import { UserPrincipal } from '../../../authorization/domain/value-objects/user-principal';
 
 /**
  * Engagement HTTP controller.
@@ -30,7 +36,7 @@ import { PasswordResetRequestDto } from './dto/password-reset-request.dto';
  *   POST /v1/engagement/password-reset/confirm
  *     — body: { token, newPassword }. Rotates password.
  *
- * Authenticated endpoints (X-User-Id header for V1):
+ * Authenticated endpoints (Bearer JWT):
  *
  *   POST /v1/engagement/email-verification/request
  *     — issues a fresh verification token for the calling user.
@@ -48,14 +54,17 @@ export class EngagementController {
     private readonly getAuditLogUc: GetAuditLogForUserUseCase,
   ) {}
 
+  @UseGuards(JwtAuthGuard, ScopesGuard)
+  @Scopes('auth:read')
   @Post('email-verification/request')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async requestEmailVerif(
-    @Headers('x-user-id') userId: string,
+    @CurrentUser() principal: UserPrincipal,
   ): Promise<void> {
-    await this.requestEmailVerifUc.execute({ userId });
+    await this.requestEmailVerifUc.execute({ userId: principal.userId });
   }
 
+  @Public()
   @Post('email-verification/confirm')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async confirmEmailVerif(
@@ -64,6 +73,7 @@ export class EngagementController {
     await this.confirmEmailVerifUc.execute({ token: body.token });
   }
 
+  @Public()
   @Post('password-reset/request')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async requestPwReset(
@@ -72,6 +82,7 @@ export class EngagementController {
     await this.requestPwResetUc.execute({ email: body.email });
   }
 
+  @Public()
   @Post('password-reset/confirm')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async confirmPwReset(
@@ -83,8 +94,10 @@ export class EngagementController {
     });
   }
 
+  @UseGuards(JwtAuthGuard, ScopesGuard)
+  @Scopes('auth:read')
   @Get('audit-log/me')
-  public async myAuditLog(@Headers('x-user-id') userId: string) {
-    return this.getAuditLogUc.execute({ userId, limit: 100 });
+  public async myAuditLog(@CurrentUser() principal: UserPrincipal) {
+    return this.getAuditLogUc.execute({ userId: principal.userId, limit: 100 });
   }
 }

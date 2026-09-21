@@ -1,0 +1,112 @@
+# =============================================================================
+# Administration GraphQL schema.
+#
+# Mirrors the REST /admin/* surface (separate listener on port 3001,
+# API-key + IP-allowlist gated). The GraphQL path lets admin web
+# consoles use the same backend without writing fetch boilerplate.
+#
+# V1.5: every mutation requires admin auth (Authorization: Bearer
+# <admin-scoped JWT> + X-Admin-Api-Key + IP allowlist). The admin key
+# is supplied via `X-Cerberus-Admin-Api-Key` header.
+# =============================================================================
+
+# A registered admin API key. The plaintext is shown ONCE at issue
+# time (issueAdminApiKey mutation). V1.5 replaces it with the existing
+# argon2id Argon2AdminApiKeyHasher.
+type AdminApiKey {
+  id: ID!
+  name: String!
+  role: AdminRole!
+  lastUsedAt: String
+  expiresAt: String
+  revokedAt: String
+  revokedReason: String
+  createdBy: String
+  createdAt: String!
+}
+
+enum AdminRole {
+  ADMIN
+  SUPER_ADMIN
+}
+
+input IssueAdminApiKeyInput {
+  """Operator-supplied label. 3-80 chars."""
+  name: String!
+  """Days the key lives. Defaults to 365."""
+  ttlSeconds: Int = 31536000
+  """Free-form note (audit log only)."""
+  notes: String
+}
+
+type IssueAdminApiKeyPayload {
+  key: AdminApiKey!
+  """Plaintext key — shown ONLY here, never retrievable again."""
+  apiKey: String!
+}
+
+input AdminDisableUserMfaInput {
+  userId: ID!
+  """Optional admin key id for audit attribution (GraphQL callers usually leave this null)."""
+  adminKeyId: ID
+  reason: String
+}
+
+type AdminDisableUserMfaPayload {
+  userId: ID!
+  """The admin key that performed the disable. null when called via GraphQL with admin JWT (audit-log entry still recorded)."""
+  adminKeyId: ID
+  occurredAt: String!
+}
+
+# A read-only view of a user from the admin's perspective.
+type AdminUserView {
+  id: ID!
+  email: String!
+  displayName: String
+  mfaEnabled: Boolean!
+  emailVerifiedAt: String
+  createdAt: String!
+  organizationId: ID!
+}
+
+input AdminAuditSearchInput {
+  """Filter by user ID. Omit for org-wide search."""
+  userId: ID
+  """Filter by exact event type."""
+  eventType: String
+  """Max rows. 1-500. Defaults to 100."""
+  limit: Int = 100
+  """Pagination offset. Defaults to 0."""
+  offset: Int = 0
+}
+
+type AdminHealth {
+  status: String!
+  surface: String!
+}
+
+extend type Query {
+  """Admin surface liveness probe."""
+  adminHealth: AdminHealth!
+
+  """List all admin API keys (live + revoked)."""
+  adminApiKeys: [AdminApiKey!]!
+
+  """Look up a specific user as admin. Requires `org:admin` scope."""
+  adminUser(id: ID!): AdminUserView!
+
+  """Search the audit log across users / event types. `org:admin` scope required."""
+  adminAuditLog(input: AdminAuditSearchInput!): [AuditLogEntry!]!
+}
+
+extend type Mutation {
+  """Mint a new admin API key. Returns plaintext exactly once."""
+  issueAdminApiKey(input: IssueAdminApiKeyInput!): IssueAdminApiKeyPayload!
+
+  """Revoke an admin API key. Soft-revoke (idempotent)."""
+  revokeAdminApiKey(id: ID!): Boolean!
+
+  """Admin override: disable a user's MFA. Writes `admin.user.mfa_disabled` audit log."""
+  adminDisableUserMfa(input: AdminDisableUserMfaInput!): AdminDisableUserMfaPayload!
+}

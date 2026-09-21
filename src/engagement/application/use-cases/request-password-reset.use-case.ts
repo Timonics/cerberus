@@ -101,8 +101,9 @@ export class RequestPasswordResetUseCase {
       new PasswordResetRequested(
         this.idGenerator.generate(),
         this.clock.now(),
-        result.reset.id,
         result.user.id.value,
+        result.reset.id,
+        plaintext,
       ),
     ]);
 

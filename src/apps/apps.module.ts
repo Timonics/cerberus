@@ -12,6 +12,7 @@ import { RegisterAppUseCase } from './application/use-cases/register-app.use-cas
 import { RotateAppApiKeyUseCase } from './application/use-cases/rotate-app-api-key.use-case';
 import { RevokeAppUseCase } from './application/use-cases/revoke-app.use-case';
 import { VerifyAppApiKeyUseCase } from './application/use-cases/verify-app-api-key.use-case';
+import { AppsGraphqlResolver } from './interfaces/graphql/apps.resolver';
 import {
   Argon2AppApiKeyHasher,
   APP_API_KEY_HASHER,
@@ -69,6 +70,9 @@ import { AppsController } from './interfaces/http/apps.controller';
     RotateAppApiKeyUseCase,
     RevokeAppUseCase,
     VerifyAppApiKeyUseCase,
+
+    // GraphQL resolver (V1.5)
+    AppsGraphqlResolver,
 
     // Global error filter for the apps endpoints (REST context).
     {

@@ -49,6 +49,13 @@ export interface AppConfig {
   email: {
     transport: 'log' | 'smtp' | 'sendgrid';
     from: string;
+    /**
+     * Public base URL used to build email verification + password
+     * reset links. Defaults to `http://localhost:3000` in dev. In
+     * production, set to the externally-reachable URL (e.g.
+     * `https://auth.example.com`).
+     */
+    publicUrl: string;
     smtp: {
       host: string;
       port: number;
@@ -124,6 +131,7 @@ export const configuration = (): AppConfig => {
         (process.env.EMAIL_TRANSPORT as AppConfig['email']['transport']) ??
         'log',
       from: process.env.EMAIL_FROM ?? 'Cerberus <no-reply@cerberus.local>',
+      publicUrl: process.env.EMAIL_PUBLIC_URL ?? 'http://localhost:3000',
       smtp: {
         host: process.env.SMTP_HOST ?? 'localhost',
         port: Number(process.env.SMTP_PORT ?? 1025),

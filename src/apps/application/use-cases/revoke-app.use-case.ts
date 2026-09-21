@@ -11,6 +11,7 @@ import {
   APP_REPOSITORY,
   AppRepository,
 } from '../../domain/ports/app.repository.port';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
 /**
  * Revoke an app.
@@ -24,19 +25,28 @@ export class RevokeAppUseCase {
     @Inject(TRANSACTION_RUNNER) private readonly txRunner: TransactionRunner,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(APP_REPOSITORY) private readonly repo: AppRepository,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(appId: string): Promise<void> {
-    await this.txRunner.run<void>(async (tx: Tx) => {
+    const revoked = await this.txRunner.run<boolean>(async (tx: Tx) => {
       const existing = await this.repo.findById(tx, appId);
       if (!existing) {
         throw new DomainError('app.not_found', 'App not found', { appId });
       }
       if (existing.revokedAt !== null) {
-        return; // idempotent
+        return false; // already revoked (idempotent)
       }
-      const revoked = existing.revoke(this.clock);
-      await this.repo.save(tx, revoked);
+      const updated = existing.revoke(this.clock);
+      await this.repo.save(tx, updated);
+      return true;
     });
+    if (revoked) {
+      await this.recordAuditEventUc.execute({
+        userId: null,
+        eventType: 'apps.app.revoked',
+        payload: { appId },
+      });
+    }
   }
 }

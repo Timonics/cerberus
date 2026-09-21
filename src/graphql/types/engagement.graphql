@@ -163,3 +163,43 @@ type Mutation {
   """
   confirmPasswordReset(input: ConfirmPasswordResetInput!): Boolean!
 }
+
+# =============================================================================
+# Authenticated engagement endpoints (V1.5)
+# =============================================================================
+
+extend type Mutation {
+  """
+  Request a fresh email-verification token for the calling user.
+  Always returns true; the token is sent via the configured mail
+  sender, NOT returned in the response.
+  """
+  requestEmailVerification: Boolean!
+}
+
+"""
+A single audit-log entry. Append-only — never updated, never deleted.
+"""
+type AuditLogEntry {
+  id: ID!
+  """Event type, e.g. `identity.user.registered`."""
+  eventType: String!
+  """User this event is attributed to (null for events with no user)."""
+  userId: ID
+  """Arbitrary JSON payload describing the event."""
+  payload: String!
+  """Originating IP at the time of the event, if recorded."""
+  ipAddress: String
+  """User-Agent at the time of the event, if recorded."""
+  userAgent: String
+  """Event timestamp (ISO-8601)."""
+  occurredAt: String!
+}
+
+extend type Query {
+  """
+  The calling user's own audit log, most recent first.
+  Server-side limit is bounded to 1–500.
+  """
+  auditLogMe(limit: Int = 100): [AuditLogEntry!]!
+}

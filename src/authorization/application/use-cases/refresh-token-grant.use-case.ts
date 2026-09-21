@@ -15,6 +15,14 @@ import { IssueAccessTokenUseCase } from './issue-access-token.use-case';
 
 export interface RefreshTokenGrantInput {
   refreshToken: string;
+  /**
+   * Optional — slug of the org to scope the new access token to.
+   * V1.5: when the OAuth2 refresh call carries an app's org
+   * binding, pass it here so the issued access token matches the
+   * session's org. V1 ignored this and the JWT always picked the
+   * user's first org.
+   */
+  organizationSlug?: string | null;
 }
 
 export interface RefreshTokenGrantResult {
@@ -81,6 +89,7 @@ export class RefreshTokenGrantUseCase {
 
     const issued = await this.issueAccessTokenUc.execute({
       userId: userId.value,
+      organizationSlug: input.organizationSlug ?? null,
     });
 
     return {

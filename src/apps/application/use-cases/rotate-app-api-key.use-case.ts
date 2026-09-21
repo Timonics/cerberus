@@ -11,6 +11,7 @@ import {
 } from '../../../shared/domain';
 import { App, generateAppApiKeyPlaintext } from '../../domain/aggregates/app';
 import { AppApiKey } from '../../domain/aggregates/app-api-key';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
   APP_REPOSITORY,
   AppRepository,
@@ -38,6 +39,7 @@ export class RotateAppApiKeyUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(APP_REPOSITORY) private readonly repo: AppRepository,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
     private readonly hasher: Argon2AppApiKeyHasher,
   ) {}
 
@@ -71,6 +73,13 @@ export class RotateAppApiKeyUseCase {
       });
       const updated = existing.rotateKey(newKey);
       return this.repo.save(tx, updated);
+    });
+
+    // Audit: apps.app.key_rotated.
+    await this.recordAuditEventUc.execute({
+      userId: null,
+      eventType: 'apps.app.key_rotated',
+      payload: { appId: app.id },
     });
 
     return { app, plaintextApiKey: plaintextToken };

@@ -25,15 +25,20 @@ import { AuditEventType } from '../../../engagement/domain/value-objects/audit-e
 export interface AdminDisableUserMfaInput {
   /** The user whose MFA will be disabled. */
   userId: string;
-  /** Identifier of the admin key performing the action (for audit). */
-  adminKeyId: string;
+  /**
+   * Identifier of the admin key performing the action (for audit).
+   * Optional when invoked via GraphQL (no API key in scope) or by a
+   * SUPER_ADMIN operator who used only their JWT. The audit row
+   * records `null` in that case.
+   */
+  adminKeyId?: string | null;
   /** Optional human-readable reason for the override. */
-  reason?: string;
+  reason?: string | null;
 }
 
 export interface AdminDisableUserMfaResult {
   userId: string;
-  adminKeyId: string;
+  adminKeyId: string | null;
   occurredAt: Date;
 }
 
@@ -97,7 +102,11 @@ export class AdminDisableUserMfaUseCase {
       const audit = AuditLog.create({
         id: this.idGenerator.generate(),
         userId: input.userId,
-        eventType: AuditEventType.create('identity.mfa.disabled'),
+        // V1.5 fix: dedicated event type `admin.user.mfa_disabled` (was
+        // reusing `identity.mfa.disabled`). The two are distinct: a
+        // user-initiated disable fires `identity.mfa.disabled` from
+        // DisableMfaUseCase; an admin-override fires this one.
+        eventType: AuditEventType.create('admin.user.mfa_disabled'),
         payload: {
           adminKeyId: input.adminKeyId,
           reason: input.reason ?? 'admin override (no TOTP)',
@@ -112,7 +121,7 @@ export class AdminDisableUserMfaUseCase {
 
     return {
       userId: input.userId,
-      adminKeyId: input.adminKeyId,
+      adminKeyId: input.adminKeyId ?? null,
       occurredAt,
     };
   }

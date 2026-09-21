@@ -86,8 +86,9 @@ export class RequestEmailVerificationUseCase {
       new EmailVerificationRequested(
         this.idGenerator.generate(),
         this.clock.now(),
-        verification.id,
         verification.userId.value,
+        verification.id,
+        plaintext,
       ),
     ]);
 

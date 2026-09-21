@@ -29,6 +29,8 @@ export type DomainErrorCode =
   | 'authentication.session.revoked'
   | 'authentication.refresh_token_reused'
   | 'authentication.rate_limited'
+  | 'authentication.token.missing'
+  | 'authentication.app_membership_required'
   // Authorization
   | 'authorization.role.not_found'
   | 'authorization.token.invalid'

@@ -1,6 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../config/configuration';
+import { AuthorizationModule } from '../authorization/authorization.module';
+import { IdentityModule } from '../identity/identity.module';
 import { ConfirmEmailVerificationUseCase } from './application/use-cases/confirm-email-verification.use-case';
 import { ConfirmPasswordResetUseCase } from './application/use-cases/confirm-password-reset.use-case';
 import { GetAuditLogForUserUseCase } from './application/use-cases/get-audit-log-for-user.use-case';
@@ -8,6 +10,7 @@ import { RecordAuditEventUseCase } from './application/use-cases/record-audit-ev
 import { RequestEmailVerificationUseCase } from './application/use-cases/request-email-verification.use-case';
 import { RequestPasswordResetUseCase } from './application/use-cases/request-password-reset.use-case';
 import { UserRegisteredVerificationRequester } from './application/event-handlers/user-registered.handler';
+import { MailSenderDispatcher } from './application/event-handlers/mail-sender.dispatcher';
 import { AUDIT_LOG_REPOSITORY } from './domain/ports/audit-log.repository.port';
 import { EMAIL_VERIFICATION_REPOSITORY } from './domain/ports/email-verification.repository.port';
 import { MAIL_SENDER } from './domain/ports/mail-sender.port';
@@ -39,6 +42,12 @@ import { EngagementResolver } from './interfaces/graphql/engagement.resolver';
  */
 @Global()
 @Module({
+  // IdentityModule is imported (not just relied-upon as @Global()) so
+  // that `UserRepository` is visible to `MailSenderDispatcher`'s
+  // constructor-injection. Even though IdentityModule is itself
+  // `@Global()`, the engagement module's provider scan requires the
+  // import to be explicit.
+  imports: [IdentityModule, AuthorizationModule],
   controllers: [EngagementController],
   providers: [
     // Infrastructure
@@ -94,6 +103,7 @@ import { EngagementResolver } from './interfaces/graphql/engagement.resolver';
 
     // Cross-context event handler
     UserRegisteredVerificationRequester,
+    MailSenderDispatcher,
 
     // GraphQL resolver
     EngagementResolver,

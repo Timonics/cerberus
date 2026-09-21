@@ -19,6 +19,7 @@ import {
   AdminApiKeyRepository,
 } from '../../domain/ports/admin-api-key.repository.port';
 import { AdminApiKeyHasher } from '../../infrastructure/security/argon2-admin-api-key.hasher';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
 export interface IssueAdminApiKeyInput {
   name: string;
@@ -52,6 +53,7 @@ export class IssueAdminApiKeyUseCase {
     @Inject(ADMIN_API_KEY_REPOSITORY)
     private readonly repo: AdminApiKeyRepository,
     private readonly hasher: AdminApiKeyHasher,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(
@@ -76,6 +78,17 @@ export class IssueAdminApiKeyUseCase {
     });
 
     void this.eventBus; // reserved for V1.5 audit-event fan-out
+
+    // Audit: admin.api_key.issued.
+    await this.recordAuditEventUc.execute({
+      userId: input.createdBy,
+      eventType: 'admin.api_key.issued',
+      payload: {
+        keyId: key.id,
+        name: key.name,
+        role: key.role.value,
+      },
+    });
 
     return { key, plaintextToken };
   }

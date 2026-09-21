@@ -18,6 +18,7 @@ import {
 } from '../../../shared/domain/value-objects/password-hash';
 import { Credential } from '../../domain/aggregates/credential';
 import { UserId } from '../../domain/value-objects/user-id';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
   CREDENTIAL_REPOSITORY,
   CredentialRepository,
@@ -50,6 +51,7 @@ export class ChangePasswordUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
     @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasher,
     @Inject(USER_REPOSITORY) private readonly userRepo: UserRepository,
     @Inject(CREDENTIAL_REPOSITORY)
@@ -118,5 +120,12 @@ export class ChangePasswordUseCase {
     });
 
     await this.eventBus.publishAll(events);
+
+    // Audit: identity.password.changed.
+    await this.recordAuditEventUc.execute({
+      userId: input.userId,
+      eventType: 'identity.password.changed',
+      payload: {},
+    });
   }
 }

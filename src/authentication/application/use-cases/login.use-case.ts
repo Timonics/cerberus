@@ -23,10 +23,21 @@ import {
   CredentialRepository,
 } from '../../../identity/domain/ports/credential.repository.port';
 import {
+  MEMBERSHIP_REPOSITORY,
+  MembershipRepository,
+} from '../../../identity/domain/ports/membership.repository.port';
+import {
+  ORGANIZATION_REPOSITORY,
+  OrganizationRepository,
+} from '../../../identity/domain/ports/organization.repository.port';
+import {
   USER_REPOSITORY,
   UserRepository,
 } from '../../../identity/domain/ports/user.repository.port';
+import { OrgId } from '../../../identity/domain/value-objects/org-id';
+import { OrgSlug } from '../../../identity/domain/value-objects/org-slug';
 import { Session } from '../../domain/aggregates/session';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
   LockoutPolicy,
   assertNotLocked,
@@ -54,6 +65,16 @@ export interface LoginInput {
   password: string;
   userAgent?: string;
   ipAddress?: string;
+  /**
+   * Optional. When the login carries `X-Cerberus-App-Id` headers,
+   * the controller resolves the app's `defaultOrgSlug` and passes it
+   * here. The login flow then requires the user to be a member of
+   * that org — otherwise `authentication.app_membership_required`.
+   *
+   * Without this, V1 backward-compat behavior applies: the session
+   * is scoped to the user's first org.
+   */
+  appDefaultOrgSlug?: string | null;
 }
 
 export interface LoginResult {
@@ -63,6 +84,8 @@ export interface LoginResult {
   userId: string;
   familyId: string;
   expiresAt: Date;
+  /** Organization the session is scoped to. */
+  organizationId: string | null;
   /** True if the user has MFA enabled and must complete a second factor before access. */
   mfaRequired: boolean;
 }
@@ -103,9 +126,14 @@ export class LoginUseCase {
     @Inject(USER_REPOSITORY) private readonly userRepo: UserRepository,
     @Inject(CREDENTIAL_REPOSITORY)
     private readonly credentialRepo: CredentialRepository,
+    @Inject(MEMBERSHIP_REPOSITORY)
+    private readonly membershipRepo: MembershipRepository,
+    @Inject(ORGANIZATION_REPOSITORY)
+    private readonly organizationRepo: OrganizationRepository,
     @Inject(REFRESH_TOKEN_GENERATOR)
     private readonly refreshTokenGen: RefreshTokenGenerator,
     private readonly lockoutPolicy: LockoutPolicy,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
     private readonly verifySecondFactorUc: VerifySecondFactorUseCase,
   ) {}
 
@@ -224,6 +252,10 @@ export class LoginUseCase {
       userAgent,
       ipAddress: ip,
       deviceLabel: userAgent?.deviceLabel() ?? null,
+      organizationId: await this.resolveOrgForSession(
+        user.id,
+        input.appDefaultOrgSlug ?? null,
+      ),
       clock: this.clock,
       ttlSeconds: REFRESH_TOKEN_TTL_SECONDS,
     });
@@ -250,12 +282,24 @@ export class LoginUseCase {
       ),
     ]);
 
+    // Audit: authentication.login.succeeded.
+    await this.recordAuditEventUc.execute({
+      userId: saved.session.userId.value,
+      eventType: 'authentication.login.succeeded',
+      payload: {
+        sessionId: saved.session.id.value,
+        organizationSlug: saved.session.organizationId?.value ?? null,
+        mfaRequired: requiresMfa,
+      },
+    });
+
     return {
       refreshToken: plaintextRefresh,
       sessionId: saved.session.id.value,
       userId: saved.session.userId.value,
       familyId: saved.session.familyId,
       expiresAt: saved.session.expiresAt,
+      organizationId: saved.session.organizationId?.value ?? null,
       mfaRequired: requiresMfa,
     };
   }
@@ -267,6 +311,15 @@ export class LoginUseCase {
       this.clock.now(),
       LOGIN_FAILURE_WINDOW_SECONDS,
     );
+    // Audit: authentication.login.failed. userId is null because we
+    // don't know if the email corresponds to a real user (no
+    // enumeration leak in audit log either).
+    await this.recordAuditEventUc.execute({
+      userId: null,
+      eventType: 'authentication.login.failed',
+      payload: { email, ipAddress: ip },
+      ipAddress: ip,
+    });
   }
 
   /**
@@ -295,5 +348,50 @@ export class LoginUseCase {
       // Other errors (invalid code, etc.) imply MFA IS enabled.
       return true;
     }
+  }
+
+  /**
+   * Resolve which organization this session should be scoped to.
+   *
+   * Decision tree:
+   *   1. If the caller supplied `appDefaultOrgSlug`, the user MUST be
+   *      a member of that org. Otherwise throw
+   *      `authentication.app_membership_required` (403). This is the
+   *      "app-bound login" path — a user who registered via Acme's app
+   *      but doesn't belong to Acme's org cannot log in via Acme's
+   *      headers.
+   *   2. If no `appDefaultOrgSlug`, fall back to the user's first
+   *      membership (V1 backward-compat — single-org-per-user).
+   *   3. If the user has no memberships at all (shouldn't happen —
+   *      `RegisterUserUseCase` always creates one), return null.
+   *
+   * Returns `null` for legacy sessions. The rest of the system
+   * interprets `null` as "scoped to user's first org".
+   */
+  private async resolveOrgForSession(
+    userId: UserId,
+    appDefaultOrgSlug: string | null,
+  ): Promise<OrgId | null> {
+    return this.txRunner.run(async (tx: Tx) => {
+      const membership = await this.membershipRepo.findByUserId(tx, userId);
+      if (!membership) {
+        return null;
+      }
+      if (appDefaultOrgSlug && appDefaultOrgSlug.length > 0) {
+        const targetSlug = OrgSlug.create(appDefaultOrgSlug);
+        const org = await this.organizationRepo.findById(
+          tx,
+          membership.organizationId,
+        );
+        if (!org || !org.slug.equals(targetSlug)) {
+          throw new DomainError(
+            'authentication.app_membership_required',
+            'User is not a member of the organization bound to this app',
+            { appDefaultOrgSlug, userId: userId.value },
+          );
+        }
+      }
+      return membership.organizationId;
+    });
   }
 }

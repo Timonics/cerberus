@@ -21,14 +21,28 @@ import {
   SessionRepository,
 } from '../../domain/ports/session.repository.port';
 import { RefreshTokenHash } from '../../domain/value-objects/refresh-token-hash';
+import {
+  ORGANIZATION_REPOSITORY,
+  OrganizationRepository,
+} from '../../../identity/domain/ports/organization.repository.port';
+import { OrgSlug } from '../../../identity/domain/value-objects/org-slug';
 
 export interface RefreshSessionInput {
   refreshToken: string;
+  /**
+   * Optional. When the refresh carries `X-Cerberus-App-Id` headers,
+   * the controller resolves the app's `defaultOrgSlug` and passes it
+   * here. The use-case requires the existing session to be scoped to
+   * that org; otherwise throws `authentication.app_membership_required`
+   * (403). Without this, V1 backward-compat applies.
+   */
+  appDefaultOrgSlug?: string | null;
 }
 
 export interface RefreshSessionResult {
   refreshToken: string;
   sessionId: string;
+  userId: string;
   familyId: string;
   expiresAt: Date;
 }
@@ -67,6 +81,8 @@ export class RefreshSessionUseCase {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
     @Inject(SESSION_REPOSITORY) private readonly sessionRepo: SessionRepository,
+    @Inject(ORGANIZATION_REPOSITORY)
+    private readonly organizationRepo: OrganizationRepository,
     @Inject(REFRESH_TOKEN_GENERATOR)
     private readonly refreshTokenGen: RefreshTokenGenerator,
   ) {}
@@ -96,6 +112,36 @@ export class RefreshSessionUseCase {
           'authentication.session.expired',
           'Refresh token is no longer valid',
         );
+      }
+
+      // App-bound org-scope check. When the refresh carries an app's
+      // defaultOrgSlug, the session must already be scoped to that org.
+      // Without this, a user could refresh a session they obtained via
+      // a different app — i.e. cross-app session leak.
+      //
+      // V1.5 fix: legacy sessions with `organizationId = NULL` are
+      // accepted under any app context. V2 will require explicit
+      // re-binding.
+      if (input.appDefaultOrgSlug && existing.organizationId === null) {
+        // Legacy unscoped session — accept (V1 backward-compat).
+      } else if (input.appDefaultOrgSlug && existing.organizationId !== null) {
+        const sessionOrg = await this.organizationRepo.findById(
+          tx,
+          existing.organizationId,
+        );
+        if (
+          !sessionOrg ||
+          !sessionOrg.slug.equals(OrgSlug.create(input.appDefaultOrgSlug))
+        ) {
+          throw new DomainError(
+            'authentication.app_membership_required',
+            'Refresh token is scoped to a different organization than this app binds to',
+            {
+              sessionOrgSlug: sessionOrg?.slug.value ?? null,
+              appDefaultOrgSlug: input.appDefaultOrgSlug,
+            },
+          );
+        }
       }
 
       // Reuse detection: if `lastUsedAt` is set and recent, this token
@@ -157,6 +203,7 @@ export class RefreshSessionUseCase {
       return {
         refreshToken: newPlaintext,
         sessionId: saved.id.value,
+        userId: saved.userId.value,
         familyId: saved.familyId,
         expiresAt: saved.expiresAt,
       };

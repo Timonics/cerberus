@@ -1,13 +1,13 @@
 {
   "info": {
-    "_postman_id": "cerberus-5a7c2vhk5",
+    "_postman_id": "cerberus-3b3th2by9",
     "name": "Cerberus",
-    "description": "Full REST + GraphQL surface for the Cerberus auth service.\n\n**Setup**\n1. Import `Cerberus.dev.postman_environment.json`.\n2. Set `baseUrl` to your running server (default `http://localhost:3000`).\n3. Run `OAuth2 > POST /v1/oauth/token — password grant` — the test script auto-saves the bearer token into the env.\n\n**Conventions**\n- Every authenticated REST endpoint expects `Authorization: Bearer {{bearerToken}}`.\n- Phase-11 placeholder endpoints (change-password, MFA, audit-log/me, update-display-name) expect `X-User-Id: {{userId}}` instead.\n- TOTP codes are auto-computed by the prerequest script of `/mfa/confirm`, `/mfa/disable`, `/mfa/verify`, and the GraphQL MFA mutations.\n- GraphQL endpoints all hit `POST /graphql`; the request body is a `{query, variables}` envelope.\n- Error responses include `code` (REST) or `extensions.code` (GraphQL) with stable strings — switch on those in client code.",
+    "description": "Full REST + GraphQL surface for the Cerberus auth service.\n\n**Setup**\n1. Import `Cerberus.dev.postman_environment.json`.\n2. Set `baseUrl` to your running server (default `http://localhost:3000`).\n3. Run `OAuth2 > POST /v1/oauth/token — password grant` — the test script auto-saves the bearer token into the env.\n\n**Conventions**\n- Every authenticated REST endpoint expects `Authorization: Bearer {{bearerToken}}`.\n- Phase-11 placeholder endpoints (change-password, MFA, audit-log/me, update-display-name) expect `Authorization: {{userId}}` instead.\n- TOTP codes are auto-computed by the prerequest script of `/mfa/confirm`, `/mfa/disable`, `/mfa/verify`, and the GraphQL MFA mutations.\n- GraphQL endpoints all hit `POST /graphql`; the request body is a `{query, variables}` envelope.\n- Error responses include `code` (REST) or `extensions.code` (GraphQL) with stable strings — switch on those in client code.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "id": "9hdb8xyjh",
+      "id": "bx7j3tzon",
       "name": "Health",
       "description": "",
       "item": [
@@ -78,12 +78,12 @@
       ]
     },
     {
-      "id": "k66st2zps",
+      "id": "edmvmvomy",
       "name": "Auth",
       "description": "",
       "item": [
         {
-          "id": "kfg21b26o",
+          "id": "ffyff0p14",
           "name": "Public",
           "description": "",
           "item": [
@@ -264,8 +264,8 @@
           ]
         },
         {
-          "id": "jmq3b5flu",
-          "name": "Sessions (V1: X-User-Id placeholder)",
+          "id": "zksiiw2su",
+          "name": "Sessions (V1: Authorization placeholder)",
           "description": "",
           "item": [
             {
@@ -274,7 +274,7 @@
                 "method": "GET",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -297,7 +297,7 @@
                 "auth": {
                   "type": "noauth"
                 },
-                "description": "List all active sessions for the authenticated user. V1 uses the Phase-11 X-User-Id placeholder header (Phase 13 JWT auth replaces this). Both headers are sent for clarity."
+                "description": "List all active sessions for the authenticated user. V1 uses the Phase-11 Authorization placeholder header (Phase 13 JWT auth replaces this). Both headers are sent for clarity."
               },
               "event": [
                 {
@@ -322,7 +322,7 @@
                 "method": "POST",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -359,7 +359,7 @@
                 "auth": {
                   "type": "noauth"
                 },
-                "description": "Revoke a specific session. Must be your own session (cross-user revoke returns 404). V1 uses X-User-Id."
+                "description": "Revoke a specific session. Must be your own session (cross-user revoke returns 404). V1 uses Authorization."
               },
               "event": [
                 {
@@ -383,7 +383,7 @@
       ]
     },
     {
-      "id": "er6n4qwx1",
+      "id": "5d0raic3d",
       "name": "OAuth2 (RFC 6749 / 7662 / 7009)",
       "description": "",
       "item": [
@@ -690,12 +690,12 @@
       ]
     },
     {
-      "id": "pmo7bykx8",
+      "id": "fk54e4ez1",
       "name": "Identity",
       "description": "",
       "item": [
         {
-          "id": "t9xasn406",
+          "id": "3ma6phzh5",
           "name": "Public",
           "description": "",
           "item": [
@@ -747,7 +747,9 @@
                       "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
                       "}",
                       "pm.collectionVariables.set(\"userId\", pm.response.json().userId);",
-                      "pm.collectionVariables.set(\"organizationSlug\", pm.response.json().organizationSlug);"
+                      "pm.collectionVariables.set(\"organizationSlug\", pm.response.json().organizationSlug);",
+                      "pm.collectionVariables.set(\"accessToken\", pm.response.json().accessToken);",
+                      "pm.collectionVariables.set(\"refreshToken\", pm.response.json().refreshToken);"
                     ]
                   }
                 }
@@ -756,8 +758,8 @@
           ]
         },
         {
-          "id": "amrm3aomx",
-          "name": "Authenticated (X-User-Id placeholder)",
+          "id": "dsowp9ejm",
+          "name": "Authenticated (Bearer JWT — V1.5)",
           "description": "",
           "item": [
             {
@@ -766,7 +768,7 @@
                 "method": "POST",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -822,7 +824,7 @@
                 "method": "PATCH",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -878,7 +880,7 @@
                 "method": "PATCH",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -934,7 +936,7 @@
                 "method": "POST",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -995,7 +997,7 @@
                 "method": "POST",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -1078,7 +1080,7 @@
                 "method": "POST",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -1161,7 +1163,7 @@
                 "method": "POST",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   },
                   {
@@ -1243,12 +1245,12 @@
       ]
     },
     {
-      "id": "0penv3cu3",
+      "id": "u75ac5cx5",
       "name": "Engagement",
       "description": "",
       "item": [
         {
-          "id": "tznddvs9x",
+          "id": "i8sydo21m",
           "name": "Public",
           "description": "",
           "item": [
@@ -1409,7 +1411,7 @@
           ]
         },
         {
-          "id": "ft6hsvtl7",
+          "id": "adfbdki6r",
           "name": "Authenticated",
           "description": "",
           "item": [
@@ -1419,7 +1421,7 @@
                 "method": "POST",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   }
                 ],
@@ -1459,7 +1461,7 @@
                 "method": "GET",
                 "header": [
                   {
-                    "key": "X-User-Id",
+                    "key": "Authorization",
                     "value": "{{userId}}"
                   }
                 ],
@@ -1503,7 +1505,7 @@
       ]
     },
     {
-      "id": "er2xiprfm",
+      "id": "ifeaq8ey3",
       "name": "GraphQL (POST /graphql)",
       "description": "",
       "item": [
@@ -2244,12 +2246,12 @@
       ]
     },
     {
-      "id": "xxwqxxmtf",
+      "id": "x7szj7h8n",
       "name": "Examples — chained flows",
       "description": "",
       "item": [
         {
-          "id": "cauokpx5c",
+          "id": "8uc57fr4o",
           "name": "1. New user happy path",
           "description": "",
           "item": [
@@ -2464,7 +2466,7 @@
           ]
         },
         {
-          "id": "kamt4i9oo",
+          "id": "5eu5irh45",
           "name": "2. Password reset flow",
           "description": "",
           "item": [

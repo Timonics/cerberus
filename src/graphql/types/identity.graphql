@@ -314,3 +314,41 @@ type Mutation {
   """
   verifyMfa(input: VerifyMfaInput!): VerifyMfaResult!
 }
+
+# =============================================================================
+# Sessions (V1.5)
+# =============================================================================
+
+"""
+An active session for the calling user. Sessions live for 30 days and
+are refreshed on `POST /v1/auth/refresh`.
+"""
+type Session {
+  id: ID!
+  """Free-form label: "iPhone 15 Safari", "ci-bot", etc. Derived from user-agent."""
+  deviceLabel: String
+  """Originating IP at session creation time."""
+  ipAddress: String
+  """Session creation timestamp (ISO-8601)."""
+  issuedAt: String!
+  """Absolute expiry (ISO-8601). Sessions live 30 days."""
+  expiresAt: String!
+  """Most recent use (ISO-8601). null if never refreshed."""
+  lastUsedAt: String
+}
+
+extend type Query {
+  """
+  List the calling user's active sessions. Useful for "where you're
+  signed in" UIs and "log out everywhere" flows.
+  """
+  sessions: [Session!]!
+}
+
+extend type Mutation {
+  """
+  Revoke a specific session by ID. The caller can only revoke their
+  OWN sessions (cross-user revoke returns 403).
+  """
+  revokeSession(sessionId: ID!): Boolean!
+}

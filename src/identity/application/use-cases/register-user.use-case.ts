@@ -22,6 +22,7 @@ import { User } from '../../domain/aggregates/user';
 import { Organization } from '../../domain/aggregates/organization';
 import { Credential } from '../../domain/aggregates/credential';
 import { Membership } from '../../domain/aggregates/membership';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
   PasswordHasher,
   PASSWORD_HASHER,
@@ -50,6 +51,10 @@ import {
 export interface RegisterUserInput {
   email: string;
   password: string;
+  /** Optional — caller IP address for audit-log + rate-limit. */
+  ipAddress?: string | null;
+  /** Optional — caller user-agent string for audit-log. */
+  userAgent?: string | null;
   /**
    * Optional. If provided, the user joins the org with this slug.
    * If omitted, the auth service derives the org from the registered
@@ -126,6 +131,7 @@ export class RegisterUserUseCase {
     private readonly organizationDomainRepo: OrganizationDomainRepository,
     @Inject(MEMBERSHIP_REPOSITORY)
     private readonly membershipRepo: MembershipRepository,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(input: RegisterUserInput): Promise<RegisterUserResult> {
@@ -208,6 +214,23 @@ export class RegisterUserUseCase {
 
     // Publish post-commit events. Drains all pending domain events.
     await this.eventBus.publishAll(user.pullDomainEvents());
+
+    // Audit-log: identity.user.registered.
+    // V1.5 fix: the audit_log table was empty in V1 because no BC was
+    // writing to it. Wire the key identity events so the table becomes
+    // useful for support investigations + admin audit search.
+    await this.recordAuditEventUc.execute({
+      userId: user.id.value,
+      eventType: 'identity.user.registered',
+      payload: {
+        email: user.email.value,
+        organizationId: organization.id.value,
+        organizationSlug: organization.slug.value,
+        autoCreatedOrg,
+      },
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
+    });
 
     return {
       userId: user.id.value,

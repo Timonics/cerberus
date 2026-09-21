@@ -51,6 +51,7 @@ export const envValidationSchema = Joi.object({
   // --------------------------------------------------------------------
   EMAIL_TRANSPORT: Joi.string().valid('log', 'smtp', 'sendgrid').default('log'),
   EMAIL_FROM: Joi.string().default('Cerberus <no-reply@cerberus.local>'),
+  EMAIL_PUBLIC_URL: Joi.string().uri().default('http://localhost:3000'),
   SMTP_HOST: Joi.string().default('localhost'),
   SMTP_PORT: Joi.number().port().default(1025),
   SMTP_USER: Joi.string().allow('').default(''),

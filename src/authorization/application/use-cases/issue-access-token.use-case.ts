@@ -12,12 +12,17 @@ import {
 } from '../../../shared/domain';
 import { UserId } from '../../../identity/domain/value-objects/user-id';
 import { Role } from '../../../identity/domain/value-objects/role';
+import { OrgSlug } from '../../../identity/domain/value-objects/org-slug';
 import { Membership } from '../../../identity/domain/aggregates/membership';
 import { Scope, serializeScopes } from '../../domain/value-objects/scope';
 import {
   SIGNING_KEY_REPOSITORY,
   SigningKeyRepository,
 } from '../../domain/ports/signing-key.repository.port';
+import {
+  ORGANIZATION_REPOSITORY,
+  OrganizationRepository,
+} from '../../../identity/domain/ports/organization.repository.port';
 import { JwtSignerService } from '../../infrastructure/crypto/jwt-signer.service';
 import {
   MEMBERSHIP_REPOSITORY,
@@ -27,6 +32,14 @@ import { AppConfig } from '../../../config/configuration';
 
 export interface IssueAccessTokenInput {
   userId: string;
+  /**
+   * Optional — slug of the org to scope the access token to. V1 left
+   * this off and always picked the user's first membership; V1.5 lets
+   * the caller pin the token to a specific org (e.g. the org the
+   * session is scoped to). When omitted, the user's first membership
+   * is used (V1 backward-compat).
+   */
+  organizationSlug?: string | null;
   /** Optional — scopes to include. Defaults to the role's allowed scopes. */
   scopes?: ReadonlyArray<Scope>;
 }
@@ -62,6 +75,8 @@ export class IssueAccessTokenUseCase {
     private readonly keyRepo: SigningKeyRepository,
     @Inject(MEMBERSHIP_REPOSITORY)
     private readonly membershipRepo: MembershipRepository,
+    @Inject(ORGANIZATION_REPOSITORY)
+    private readonly organizationRepo: OrganizationRepository,
     private readonly jwtSigner: JwtSignerService,
     private readonly configService: ConfigService,
   ) {
@@ -89,6 +104,28 @@ export class IssueAccessTokenUseCase {
       scopes: ReadonlyArray<Scope>;
     }>(async (tx: Tx) => {
       const membership = await this.membershipRepo.findByUserId(tx, userId);
+      // V1.5: when the caller pins the token to a specific org, look up
+      // that org first and verify the user is actually a member.
+      if (input.organizationSlug && membership) {
+        const targetOrgSlug = OrgSlug.create(input.organizationSlug);
+        const org = await this.organizationRepo.findBySlug(tx, targetOrgSlug);
+        if (org && !org.id.equals(membership.organizationId)) {
+          throw new DomainError(
+            'authentication.app_membership_required',
+            'User is not a member of the requested organization',
+            {
+              userId: userId.value,
+              requestedOrgSlug: input.organizationSlug,
+            },
+          );
+        }
+        if (!org) {
+          // The slug doesn't exist at all — treat as no membership for
+          // that org; fall back to the user's existing membership so the
+          // token can still be issued (legacy compat).
+          void 0;
+        }
+      }
       const scopes = this.scopesFor(membership, input.scopes);
 
       const key = await this.keyRepo.getCurrent(tx);

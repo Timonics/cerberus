@@ -3,6 +3,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Tx } from '../../../shared/domain/persistence/tx';
 import { UserId } from '../../../identity/domain/value-objects/user-id';
+import { OrgId } from '../../../identity/domain/value-objects/org-id';
 import { Session, isRevokeReason } from '../../domain/aggregates/session';
 import { SessionRepository } from '../../domain/ports/session.repository.port';
 import { IpAddress } from '../../domain/value-objects/ip-address';
@@ -68,6 +69,7 @@ export class PrismaSessionRepository extends SessionRepository {
       userAgent: session.userAgent?.value ?? null,
       ipAddress: session.ipAddress?.value ?? null,
       deviceLabel: session.deviceLabel,
+      organizationId: session.organizationId?.value ?? null,
       issuedAt: session.issuedAt,
       expiresAt: session.expiresAt,
       lastUsedAt: session.lastUsedAt,
@@ -127,6 +129,7 @@ export class PrismaSessionRepository extends SessionRepository {
     userAgent: string | null;
     ipAddress: string | null;
     deviceLabel: string | null;
+    organizationId: string | null;
     issuedAt: Date;
     expiresAt: Date;
     lastUsedAt: Date | null;
@@ -141,6 +144,9 @@ export class PrismaSessionRepository extends SessionRepository {
       userAgent: row.userAgent ? UserAgent.rehydrate(row.userAgent) : null,
       ipAddress: row.ipAddress ? IpAddress.rehydrate(row.ipAddress) : null,
       deviceLabel: row.deviceLabel,
+      organizationId: row.organizationId
+        ? OrgId.rehydrate(row.organizationId)
+        : null,
       issuedAt: row.issuedAt,
       expiresAt: row.expiresAt,
       lastUsedAt: row.lastUsedAt,

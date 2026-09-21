@@ -1,5 +1,5 @@
 import { Inject } from '@nestjs/common';
-import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { Args, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { AuthGuard } from '../../../graphql/guards/auth-guard.decorator';
 import { CurrentUser } from '../../../graphql/graphql-context';
 import { GqlBadRequestException } from '../../../graphql/graphql-errors';
@@ -8,6 +8,8 @@ import { ChangePasswordUseCase } from '../../application/use-cases/change-passwo
 import { UpdateDisplayNameUseCase } from '../../application/use-cases/update-display-name.use-case';
 import { EnableMfaUseCase } from '../../application/use-cases/enable-mfa.use-case';
 import { ConfirmMfaEnrollmentUseCase } from '../../application/use-cases/confirm-mfa-enrollment.use-case';
+import { ListSessionsUseCase } from '../../../authentication/application/use-cases/list-sessions.use-case';
+import { RevokeSessionUseCase } from '../../../authentication/application/use-cases/revoke-session.use-case';
 import { DisableMfaUseCase } from '../../application/use-cases/disable-mfa.use-case';
 import { VerifySecondFactorUseCase } from '../../application/use-cases/verify-second-factor.use-case';
 import { GetUserUseCase } from '../../application/use-cases/get-user.use-case';
@@ -44,6 +46,10 @@ export class IdentityResolver {
     @Inject(VerifySecondFactorUseCase)
     private readonly verify2faUc: VerifySecondFactorUseCase,
     @Inject(GetUserUseCase) private readonly getUserUc: GetUserUseCase,
+    @Inject(ListSessionsUseCase)
+    private readonly listSessionsUc: ListSessionsUseCase,
+    @Inject(RevokeSessionUseCase)
+    private readonly revokeSessionUc: RevokeSessionUseCase,
   ) {}
 
   @Query(() => Boolean, { description: 'Unauthenticated liveness probe.' })
@@ -230,5 +236,43 @@ export class IdentityResolver {
       code: input.code,
     });
     return { matched };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sessions (V1.5)
+  // ---------------------------------------------------------------------------
+
+  @AuthGuard()
+  @Query(() => '[Session!]!', {
+    description: "List the calling user's active sessions.",
+  })
+  public async sessions(
+    @CurrentUser() user: { sub: string },
+  ): Promise<unknown[]> {
+    const result = await this.listSessionsUc.execute({ userId: user.sub });
+    return result.sessions.map((s) => ({
+      id: s.sessionId,
+      deviceLabel: s.deviceLabel,
+      ipAddress: s.ipAddress,
+      issuedAt: s.issuedAt.toISOString(),
+      expiresAt: s.expiresAt.toISOString(),
+      lastUsedAt: s.lastUsedAt ? s.lastUsedAt.toISOString() : null,
+    }));
+  }
+
+  @AuthGuard()
+  @Mutation(() => 'Boolean', {
+    description:
+      'Revoke a specific session by ID. Cross-user revoke is rejected.',
+  })
+  public async revokeSession(
+    @CurrentUser() user: { sub: string },
+    @Args('sessionId', { type: () => ID }) sessionId: string,
+  ): Promise<boolean> {
+    await this.revokeSessionUc.execute({
+      sessionId,
+      requesterUserId: user.sub,
+    });
+    return true;
   }
 }

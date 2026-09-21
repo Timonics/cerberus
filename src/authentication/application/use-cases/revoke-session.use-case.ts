@@ -13,6 +13,7 @@ import {
 } from '../../../shared/domain';
 import { UserId } from '../../../identity/domain/value-objects/user-id';
 import { SessionRevoked } from '../../domain/events/auth.events';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
   SESSION_REPOSITORY,
   SessionRepository,
@@ -46,6 +47,7 @@ export class RevokeSessionUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
     @Inject(SESSION_REPOSITORY) private readonly sessionRepo: SessionRepository,
   ) {}
 
@@ -104,5 +106,16 @@ export class RevokeSessionUseCase {
         'USER_LOGOUT',
       ),
     ]);
+
+    // Audit: authentication.session.revoked.
+    await this.recordAuditEventUc.execute({
+      userId: result.userId.value,
+      eventType: 'authentication.session.revoked',
+      payload: {
+        sessionId: result.sessionId.value,
+        revokedBy: 'USER_LOGOUT',
+        requesterUserId: input.requesterUserId,
+      },
+    });
   }
 }

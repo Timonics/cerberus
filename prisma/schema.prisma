@@ -238,10 +238,15 @@ model Session {
   ipAddress    String?
   /// Best-effort device label derived from user agent.
   deviceLabel  String?
+  /// Organization this session is scoped to. V1 (pre-V1.5) sessions
+  /// have NULL here — that legacy state is interpreted as "scoped to
+  /// the user's first org" by the auth flow. Going forward every
+  /// login / refresh writes this column.
+  organizationId String?   @db.Uuid
   issuedAt     DateTime      @default(now())
   expiresAt    DateTime
-  lastUsedAt   DateTime?
-  revokedAt    DateTime?
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
   /// Reason recorded on revoke; null while the session is alive.
   revokeReason RevokeReason?
 
@@ -249,6 +254,7 @@ model Session {
 
   @@index([userId])
   @@index([familyId])
+  @@index([organizationId])
   @@map("sessions")
 }
 
