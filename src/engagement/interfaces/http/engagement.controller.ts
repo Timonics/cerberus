@@ -20,6 +20,7 @@ import { CurrentUser } from '../../../authorization/interfaces/security/current-
 import { Scopes } from '../../../authorization/interfaces/security/scopes.decorator';
 import { JwtAuthGuard } from '../../../authorization/interfaces/security/jwt-auth.guard';
 import { ScopesGuard } from '../../../authorization/interfaces/security/scopes.guard';
+import { ThrottleGuard, Throttle } from '../../../common/throttle.guard';
 import { UserPrincipal } from '../../../authorization/domain/value-objects/user-principal';
 
 /**
@@ -74,6 +75,8 @@ export class EngagementController {
   }
 
   @Public()
+  @Throttle(60, 5) // 5 reset requests / minute / IP — prevents email-bombing
+  @UseGuards(ThrottleGuard)
   @Post('password-reset/request')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async requestPwReset(

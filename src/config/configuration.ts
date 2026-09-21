@@ -22,6 +22,10 @@ export interface AppConfig {
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
 
   /** JWT signing parameters. */
+  /** V1.5: server-side HMAC secret for email-verification & password-reset
+   * tokens. Rotating this invalidates all outstanding tokens (intentional
+   * fail-secure — same pattern as JWT signing keys). 32+ chars required. */
+  tokenSecret: string;
   jwt: {
     issuer: string;
     audienceDefault: string;
@@ -111,6 +115,11 @@ export const configuration = (): AppConfig => {
     adminPort: Number(process.env.ADMIN_PORT ?? 3001),
     logLevel: (process.env.LOG_LEVEL as AppConfig['logLevel']) ?? 'info',
 
+    tokenSecret:
+      process.env.TOKEN_SECRET ??
+      // Fail-secure default for dev. In production, the Joi validator
+      // requires an explicit value (32+ chars).
+      'dev-only-insecure-default-please-override-32chars',
     jwt: {
       issuer: process.env.JWT_ISSUER ?? 'cerberus',
       audienceDefault: process.env.JWT_AUDIENCE_DEFAULT ?? 'cerberus-clients',

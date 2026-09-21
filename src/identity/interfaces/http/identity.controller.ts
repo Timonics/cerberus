@@ -27,6 +27,7 @@ import { CurrentUser } from '../../../authorization/interfaces/security/current-
 import { Scopes } from '../../../authorization/interfaces/security/scopes.decorator';
 import { JwtAuthGuard } from '../../../authorization/interfaces/security/jwt-auth.guard';
 import { ScopesGuard } from '../../../authorization/interfaces/security/scopes.guard';
+import { ThrottleGuard, Throttle } from '../../../common/throttle.guard';
 import { UserPrincipal } from '../../../authorization/domain/value-objects/user-principal';
 
 /**
@@ -61,6 +62,8 @@ export class IdentityController {
   ) {}
 
   @Public()
+  @Throttle(60, 10) // 10 registrations / minute / IP
+  @UseGuards(ThrottleGuard)
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   public async register(

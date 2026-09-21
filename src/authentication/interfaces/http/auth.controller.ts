@@ -24,6 +24,7 @@ import { CurrentUser } from '../../../authorization/interfaces/security/current-
 import { Scopes } from '../../../authorization/interfaces/security/scopes.decorator';
 import { JwtAuthGuard } from '../../../authorization/interfaces/security/jwt-auth.guard';
 import { ScopesGuard } from '../../../authorization/interfaces/security/scopes.guard';
+import { ThrottleGuard, Throttle } from '../../../common/throttle.guard';
 import { UserPrincipal } from '../../../authorization/domain/value-objects/user-principal';
 
 /**
@@ -74,6 +75,8 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(60, 20) // 20 login attempts / minute / IP — pairs with the in-DB lockout
+  @UseGuards(ThrottleGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   public async login(

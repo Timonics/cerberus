@@ -5,20 +5,21 @@ import { PasswordHasher } from '../../../shared/domain/value-objects/password-ha
 /**
  * Argon2id password hasher.
  *
- * Default parameters follow OWASP's 2024 minimum recommendations for
- * argon2id:
+ * Parameters follow OWASP's 2024 minimum recommendations for
+ * argon2id, with some headroom for production cost:
  *
- *   * memoryCost: 19 MiB (`m=19456` kibibytes, rounded to 65536 to give
- *     headroom for future cost increases).
- *   * timeCost: 2 iterations (`t=2`).
- *   * parallelism: 1 (`p=1`).
+ *   * memoryCost: 64 MiB (`m=65536`). OWASP minimum is 19 MiB;
+ *     production deployments should target 250–500ms per hash, which
+ *     a single-threaded 64 MiB / 3-iteration argon2 verify hits on
+ *     modern server hardware. Bump via env var if your hardware is
+ *     slower (TODO V1.5: surface these as configurable).
+ *   * timeCost: 3 iterations.
+ *   * parallelism: 1 (single-threaded).
  *
- * OWASP recommends tuning to take ~250–500ms on production hardware. The
- * defaults here will take ~50ms on a modern server; production deployments
- * SHOULD bump them via env vars (TODO V1.5). The PHC output is the
- * standard `$argon2id$v=19$m=...,t=...,p=...$<salt>$<hash>` format which
- * is self-describing, so we can change the parameters without rewriting
- * stored hashes.
+ * Output is the standard `$argon2id$v=19$m=...,t=...,p=...$<salt>$<hash>`
+ * format which is self-describing — stored hashes carry their own
+ * parameters, so future increases in memoryCost don't invalidate
+ * existing hashes (argon2 reads the parameters from the hash itself).
  */
 @Injectable()
 export class Argon2PasswordHasher implements PasswordHasher {

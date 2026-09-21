@@ -25,6 +25,13 @@ export const envValidationSchema = Joi.object({
   // --------------------------------------------------------------------
   // JWT
   // --------------------------------------------------------------------
+  // V1.5: HMAC secret for email-verification & password-reset tokens.
+  // Must be at least 32 chars in production (the dev default works
+  // for local dev so the workflow doesn't require extra setup; in
+  // production deploys this MUST be set explicitly).
+  TOKEN_SECRET: Joi.string()
+    .min(32)
+    .default('dev-only-insecure-default-please-override-32chars'),
   JWT_ISSUER: Joi.string().default('cerberus'),
   JWT_AUDIENCE_DEFAULT: Joi.string().default('cerberus-clients'),
   ACCESS_TOKEN_TTL: Joi.number().integer().positive().default(900),
