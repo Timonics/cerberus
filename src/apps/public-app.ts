@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { RequestMethod } from '@nestjs/common';
+import type { Request, Response, NextFunction } from 'express';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AppModule } from '../app.module';
 import { GraphqlDomainErrorFilter } from '../graphql/graphql-domain-error.filter';
@@ -25,7 +26,17 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
   app.useLogger(app.get(PinoLogger));
   app.flushLogs();
 
-  app.use(helmet());
+  // helmet applies strict defaults (CSP, X-Frame-Options, etc.) that
+  // block Scalar's inline scripts and CDN-fetched assets at /api-docs.
+  // Apply helmet only to paths that are NOT the API docs — every other
+  // route (REST + GraphQL + JWKS) keeps the security headers.
+  const apiDocsPathPrefix = '/api-docs';
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith(apiDocsPathPrefix)) {
+      return next();
+    }
+    return helmet()(req, res, next);
+  });
   app.enableCors({ origin: false });
 
   app.useGlobalPipes(

@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
+import type { Request, Response, NextFunction } from 'express';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AdminModule } from '../administration/administration.module';
 import { readArtifact } from '../common/artifact-loader';
@@ -32,9 +33,14 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
   app.useLogger(app.get(PinoLogger));
   app.flushLogs();
 
-  // helmet is more aggressive on the admin surface — we block all
-  // cross-origin traffic and disable the form-action allowance.
-  app.use(helmet());
+  // Skip helmet on /admin/docs (Scalar UI), same as the public app.
+  // helmet's strict CSP blocks Scalar's inline scripts and CDN assets.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith('/admin/docs')) {
+      return next();
+    }
+    return helmet()(req, res, next);
+  });
   app.enableCors({ origin: false });
 
   app.useGlobalPipes(
