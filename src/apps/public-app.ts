@@ -29,10 +29,19 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
   // helmet applies strict defaults (CSP, X-Frame-Options, etc.) that
   // block Scalar's inline scripts and CDN-fetched assets at /api-docs.
   // Apply helmet only to paths that are NOT the API docs — every other
-  // route (REST + GraphQL + JWKS) keeps the security headers.
+  // route (REST + GraphQL + JWKS) keeps the security headers. We also
+  // explicitly remove any CSP-related headers that may have leaked from
+  // earlier middleware, since browser cache can pin a stale response.
   const apiDocsPathPrefix = '/api-docs';
+  const isApiDocsPath = (path: string): boolean =>
+    path === apiDocsPathPrefix || path.startsWith(`${apiDocsPathPrefix}/`);
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path.startsWith(apiDocsPathPrefix)) {
+    if (isApiDocsPath(req.path)) {
+      res.removeHeader('Content-Security-Policy');
+      res.removeHeader('Content-Security-Policy-Report-Only');
+      res.removeHeader('Cross-Origin-Embedder-Policy');
+      res.removeHeader('Cross-Origin-Opener-Policy');
+      res.removeHeader('Cross-Origin-Resource-Policy');
       return next();
     }
     return helmet()(req, res, next);

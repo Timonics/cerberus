@@ -35,8 +35,17 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
 
   // Skip helmet on /admin/docs (Scalar UI), same as the public app.
   // helmet's strict CSP blocks Scalar's inline scripts and CDN assets.
+  // We also explicitly remove any CSP-related headers that may have
+  // leaked from earlier middleware (defensive against cache).
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path.startsWith('/admin/docs')) {
+    const isDocsPath =
+      req.path === '/admin/docs' || req.path.startsWith('/admin/docs/');
+    if (isDocsPath) {
+      res.removeHeader('Content-Security-Policy');
+      res.removeHeader('Content-Security-Policy-Report-Only');
+      res.removeHeader('Cross-Origin-Embedder-Policy');
+      res.removeHeader('Cross-Origin-Opener-Policy');
+      res.removeHeader('Cross-Origin-Resource-Policy');
       return next();
     }
     return helmet()(req, res, next);

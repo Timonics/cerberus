@@ -71,8 +71,22 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Scalar requires Node 22+ (EBADENGINE warning otherwise);
+          # we run 22 in CI even though the project's `engines.node`
+          # field is `>=20.0.0`. The README's local-dev instructions
+          # recommend Node 20 since Scalar is dev-only — CI runs 22
+          # to validate the full toolchain including the docs UI.
+          node-version: '22'
+          # Pin npm to the same major version that generated
+          # package-lock.json. Without this, the action installs the
+          # latest npm (currently 11.x), which produces a different
+          # transitive resolution than the lock file's npm@10.x
+          # graph — `npm ci` then fails with 'Missing: @emnapi/...'
+          # errors. Re-bump when the lock file is regenerated.
           cache: 'npm'
+
+      - name: Install npm 10.x (matches lock file)
+        run: npm install -g npm@10
 
       - name: Show Node + npm versions
         run: |
@@ -83,11 +97,10 @@ jobs:
       # Install dependencies.
       # ------------------------------------------------------------------
       - name: Install dependencies
-        run: npm ci
-        # audit blocks on 10 known vulnerabilities in older transitive
-        # deps. Skipping for now — we ship a `--force` audit flag once
-        # they're addressed in a follow-up.
+        run: npm ci --legacy-peer-deps
         env:
+          # audit blocks on 10 known transitive vulns (axios, graphql,
+          # and others). Skipping until the team triages them.
           NPM_CONFIG_AUDIT: false
 
       # ------------------------------------------------------------------
