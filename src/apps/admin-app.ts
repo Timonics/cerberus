@@ -2,10 +2,9 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AdminModule } from '../administration/administration.module';
+import { readArtifact } from '../common/artifact-loader';
 
 /**
  * Bootstrap the admin-facing NestApplication.
@@ -51,8 +50,9 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
   // IpAllowlistGuard + AdminApiKeyGuard on `AdminController` apply
   // to every other route.
 
-  // Scalar API reference at /admin/docs. Reads `dist/openapi-admin.yaml`
-  // (copied at build time). The admin OpenAPI spec is intentionally
+  // Scalar API reference at /admin/docs. `readArtifact` prefers
+  // dist/openapi-admin.yaml (prod) and falls back to src/ for
+  // `npm run start:dev`. The admin OpenAPI spec is intentionally
   // SEPARATE from the public spec — operators hitting /admin/docs
   // see only the IP-allowlisted admin surface, not the public
   // auth endpoints.
@@ -60,10 +60,7 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
     '/admin/docs',
     apiReference({
       spec: {
-        content: readFileSync(
-          join(process.cwd(), 'dist', 'openapi-admin.yaml'),
-          'utf8',
-        ),
+        content: readArtifact('openapi-admin.yaml'),
         title: 'Cerberus Administration API',
       },
       meta: {

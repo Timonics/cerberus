@@ -3,11 +3,10 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { RequestMethod } from '@nestjs/common';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AppModule } from '../app.module';
 import { GraphqlDomainErrorFilter } from '../graphql/graphql-domain-error.filter';
+import { readArtifact } from '../common/artifact-loader';
 
 /**
  * Bootstrap the public-facing NestApplication.
@@ -47,18 +46,15 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
     ],
   });
 
-  // Scalar API reference. Reads the OpenAPI 3.1 spec from disk
-  // (copied to dist/ at build time by scripts/copy-openapi.js).
-  // V1.5 uses bearer JWT — pre-fill the auth UI so "Authorize" works
-  // out of the box.
+  // Scalar API reference. `readArtifact` prefers `dist/openapi.yaml`
+  // (production path; copied at build time by scripts/copy-openapi.js)
+  // and falls back to `src/openapi.yaml` for `npm run start:dev` —
+  // `nest start --watch` wipes `dist/` on every rebuild mid-session.
   app.use(
     '/api-docs',
     apiReference({
       spec: {
-        content: readFileSync(
-          join(process.cwd(), 'dist', 'openapi.yaml'),
-          'utf8',
-        ),
+        content: readArtifact('openapi.yaml'),
         title: 'Cerberus Authentication API',
       },
       meta: {
