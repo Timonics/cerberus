@@ -5,6 +5,9 @@
   "author": "Oderinde Michael",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "build": "nest build && node scripts/copy-graphql-sdl.js && node scripts/copy-openapi.js",
     "build:clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.build.tsbuildinfo',{force:true});require('fs').rmSync('tsconfig.tsbuildinfo',{force:true});\" && nest build",

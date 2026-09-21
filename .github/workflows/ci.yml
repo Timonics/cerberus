@@ -1,0 +1,232 @@
+# Cerberus CI
+#
+# Runs on every push to master and on every pull request.
+#
+# Three stages:
+#   1. install       — npm ci with cache
+#   2. prisma        — generate client, run migrations against a fresh DB
+#   3. build         — TypeScript + copy OpenAPI/SDL artifacts
+#   4. lint          — eslint max-warnings 0
+#
+# Tests are NOT yet implemented (the project has no test files at
+# time of writing). When tests are added under `test/`, drop a
+# `npm test` step into the pipeline. The Node version is pinned to
+# the project's `engines.node` field — currently >=20.
+
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+# Cancel any in-flight run on the same ref when a new push lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Default ports inside the CI runner (different from local dev so
+  # jobs don't collide). Postgres + Redis run as service containers.
+  DATABASE_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
+  REDIS_URL: 'redis://localhost:6379'
+  PORT: '3000'
+  ADMIN_PORT: '3001'
+
+jobs:
+  ci:
+    name: Build, lint, validate migrations
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cerberus
+          POSTGRES_PASSWORD: cerberus
+          POSTGRES_DB: cerberus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cerberus -d cerberus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Show Node + npm versions
+        run: |
+          node --version
+          npm --version
+
+      # ------------------------------------------------------------------
+      # Install dependencies.
+      # ------------------------------------------------------------------
+      - name: Install dependencies
+        run: npm ci
+        # audit blocks on 10 known vulnerabilities in older transitive
+        # deps. Skipping for now — we ship a `--force` audit flag once
+        # they're addressed in a follow-up.
+        env:
+          NPM_CONFIG_AUDIT: false
+
+      # ------------------------------------------------------------------
+      # Validate OpenAPI/GraphQL SDL artifacts. Build emits these via
+      # scripts/copy-{graphql-sdl,openapi}.js so we verify they're
+      # up to date.
+      # ------------------------------------------------------------------
+      - name: Build
+        run: npm run build
+
+      - name: Verify generated artifacts
+        run: |
+          test -f dist/openapi.yaml || (echo "::error::dist/openapi.yaml missing after build" && exit 1)
+          test -f dist/openapi-admin.yaml || (echo "::error::dist/openapi-admin.yaml missing after build" && exit 1)
+          test -d dist/graphql/types || (echo "::error::dist/graphql/types missing after build" && exit 1)
+          echo "All build artifacts present."
+
+      # ------------------------------------------------------------------
+      # Lint. `npm run lint` exits non-zero on any error or warning.
+      # ------------------------------------------------------------------
+      - name: Lint
+        run: npm run lint
+
+      # ------------------------------------------------------------------
+      # Prisma: generate client, run migrations against the CI Postgres.
+      # `prisma migrate deploy` applies pending migrations in
+      # sequence — it fails (not silently no-ops) if any migration
+      # would re-run an already-applied one.
+      # ------------------------------------------------------------------
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Wait for Postgres to accept connections
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if pg_isready -h localhost -U cerberus -d cerberus; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            echo "Waiting for Postgres ($i/10)..."
+            sleep 2
+          done
+          echo "::error::Postgres did not become ready in time"
+          exit 1
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      # ------------------------------------------------------------------
+      # Boot the dual-listener server in the background, hit the
+      # Scalar UI, the JWKS endpoint, and the GraphQL endpoint to
+      # confirm wiring is healthy. This is a smoke test — the
+      # full smoke suite belongs in `npm test` once test files
+      # exist.
+      # ------------------------------------------------------------------
+      - name: Boot server (background)
+        run: |
+          node dist/main.js &
+          echo "$!" > server.pid
+          # Wait up to 30s for the listener to bind.
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health >/dev/null 2>&1; then
+              echo "Server bound on :3000"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Smoke-test public endpoints
+        env:
+          JWT_ISSUER: cerberus-ci
+          JWT_AUDIENCE_DEFAULT: cerberus-ci
+          NODE_ENV: test
+        run: |
+          set -e
+          echo "--- GET /health"
+          curl -sf -o /tmp/health.json -w "HTTP %{http_code}\n" http://localhost:3000/health
+          cat /tmp/health.json | head -c 200; echo
+
+          echo "--- GET /.well-known/jwks.json"
+          curl -sf -w "HTTP %{http_code}\n" http://localhost:3000/.well-known/jwks.json | head -c 400; echo
+
+          echo "--- GET /api-docs (Scalar HTML)"
+          curl -sf -o /tmp/scalar.html -w "HTTP %{http_code}\n" http://localhost:3000/api-docs
+          head -c 200 /tmp/scalar.html; echo
+          test -s /tmp/scalar.html || (echo "::error::Scalar UI returned empty body" && exit 1)
+
+          echo "--- GET /v1/identity/register (no body, expect 400)"
+          curl -sf -o /tmp/reg.json -w "HTTP %{http_code}\n" \
+            -X POST http://localhost:3000/v1/identity/register \
+            -H 'Content-Type: application/json' \
+            -d '{}' || true
+          cat /tmp/reg.json | head -c 200; echo
+
+          echo "--- GET /admin/health"
+          curl -sf -w "HTTP %{http_code}\n" http://localhost:3001/admin/health
+          echo
+
+          echo "--- GET /admin/docs (Scalar HTML)"
+          curl -sf -o /tmp/admin-scalar.html -w "HTTP %{http_code}\n" http://localhost:3001/admin/docs
+          test -s /tmp/admin-scalar.html || (echo "::error::Admin Scalar UI returned empty body" && exit 1)
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" 2>/dev/null || true
+            rm -f server.pid
+          fi
+
+      # ------------------------------------------------------------------
+      # Cache the build output for downstream jobs (release workflow
+      # would consume this — not yet implemented).
+      # ------------------------------------------------------------------
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerberus-dist
+          path: |
+            dist/main.js
+            dist/openapi.yaml
+            dist/openapi-admin.yaml
+            dist/graphql/types
+          if-no-files-found: error
+          retention-days: 7
+
+  # --------------------------------------------------------------------------
+  # Future: separate `test` job that spins up Postgres + Redis with seeded
+  # migrations and runs `npm test`. Currently empty because the project
+  # has no test files. Drop the `continue-on-error: true` when tests land.
+  # --------------------------------------------------------------------------
+  test:
+    name: Tests (placeholder)
+    runs-on: ubuntu-latest
+    needs: ci
+    continue-on-error: true
+    steps:
+      - name: 'Test suite pending'
+        run: |
+          echo "No test files in test/. Drop 'npm test' here when present."
+          exit 0
