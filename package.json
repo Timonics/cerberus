@@ -11,9 +11,9 @@
   "scripts": {
     "build": "nest build && node scripts/copy-graphql-sdl.js && node scripts/copy-openapi.js",
     "build:clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.build.tsbuildinfo',{force:true});require('fs').rmSync('tsconfig.tsbuildinfo',{force:true});\" && nest build",
-    "start": "nest start",
-    "start:dev": "nest start --watch",
-    "start:debug": "nest start --debug --watch",
+    "start": "node scripts/copy-graphql-sdl.js && node scripts/copy-openapi.js && nest start",
+    "start:dev": "node scripts/copy-graphql-sdl.js && node scripts/copy-openapi.js && nest start --watch",
+    "start:debug": "node scripts/copy-graphql-sdl.js && node scripts/copy-openapi.js && nest start --debug --watch",
     "start:prod": "node dist/main.js",
     "lint": "eslint \"{src,test}/**/*.ts\" --max-warnings 0",
     "lint:fix": "eslint \"{src,test}/**/*.ts\" --fix",
