@@ -1,0 +1,862 @@
+openapi: 3.1.0
+info:
+  title: Cerberus Authentication Service
+  version: 1.5.0
+  description: |
+    Cerberus is a self-hosted authentication backend designed to be
+    embedded into other products via OAuth2 + JWT, or used as a
+    first-party identity provider via the GraphQL surface.
+
+    ## Architecture
+
+    Two surfaces on two ports:
+
+      * Public (default `:3000`) — every endpoint under `/v1/*`
+        plus `/graphql` (mounted as a schema-first Apollo Server v5).
+        This is what client apps, web frontends, and mobile apps hit.
+
+      * Admin (default `:3001`) — every endpoint under `/admin/*`.
+        API-key auth + IP allowlist. For ops + support tooling only.
+
+    ## V1.5 Bearer auth
+
+    Once logged in, authenticated endpoints accept
+    `Authorization: Bearer <accessToken>`. The access token is a JWT
+    signed with the current RSA-2048 signing key (rotated every 30 days).
+    Verifiers use the JWKS at `/.well-known/jwks.json`.
+
+    For apps / admin API keys, see the admin surface.
+  contact:
+    name: Cerberus
+    url: 'https://github.com/Timonics/cerberus'
+
+servers:
+  - url: 'http://localhost:3000'
+    description: Local dev (public listener)
+  - url: 'https://auth.example.com'
+    description: Production
+
+tags:
+  - name: Identity
+    description: User registration + self-service profile management.
+  - name: Authentication
+    description: Login, refresh-token rotation, session management.
+  - name: Engagement
+    description: Email verification, password reset, audit-log read.
+  - name: Apps
+    description: Third-party application registration + key rotation.
+  - name: Health
+    description: Liveness / readiness probes.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      description: Returns 200 with status, timestamp, and uptime. No auth required.
+      security: []
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  timestamp: { type: string, format: date-time }
+                  uptime: { type: number }
+
+  /v1/identity/register:
+    post:
+      tags: [Identity]
+      summary: Register a new user
+      description: |
+        Creates a new user. Org resolution priority:
+        1. organizationSlug from body
+        2. defaultOrgSlug of the app identified by X-Cerberus-App-Id
+        3. Email-domain match (OrganizationDomain table)
+        4. Auto-create personal org
+      security: []
+      parameters:
+        - in: header
+          name: X-Cerberus-App-Id
+          required: false
+          schema: { type: string, format: uuid }
+        - in: header
+          name: X-Cerberus-App-Secret
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterUserInput'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterUserResult' }
+        '409':
+          description: Email already in use
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '422':
+          description: Invalid input
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/identity/me:
+    patch:
+      tags: [Identity]
+      summary: Update the authenticated user's profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProfileInput' }
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserView' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/identity/change-password:
+    post:
+      tags: [Identity]
+      summary: Change the authenticated user's password
+      description: |
+        Requires current password. On success, all live sessions are
+        revoked (force re-login everywhere). Emits identity.password.changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordInput' }
+      responses:
+        '204': { description: Password changed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/identity/mfa/enable:
+    post:
+      tags: [Identity]
+      summary: Begin MFA enrollment
+      description: |
+        Generates TOTP secret + 10 recovery codes. Both are returned
+        EXACTLY ONCE. Replaces any prior pending enrollment.
+      responses:
+        '200':
+          description: Pending enrollment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MfaEnrollment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: MFA already enabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/identity/mfa/confirm:
+    post:
+      tags: [Identity]
+      summary: Confirm MFA enrollment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaCodeInput' }
+      responses:
+        '204': { description: MFA confirmed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: Invalid code
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/identity/mfa/disable:
+    post:
+      tags: [Identity]
+      summary: Disable MFA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaCodeInput' }
+      responses:
+        '204': { description: MFA disabled }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: Invalid code
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/identity/mfa/verify:
+    post:
+      tags: [Identity]
+      summary: Verify a second factor (TOTP or recovery code)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyMfaInput' }
+      responses:
+        '200':
+          description: Code verified
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerifyMfaResult' }
+        '422':
+          description: Code invalid or MFA not enabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login (password grant + app-bound)
+      description: |
+        Returns refreshToken + accessToken (V1.5) + sessionId + userId.
+        If MFA is enabled but not yet verified, mfaRequired is true.
+
+        For app-bound login, include X-Cerberus-App-Id and X-Cerberus-App-Secret
+        headers. New users register against the app's defaultOrgSlug;
+        sessions are scoped to that org.
+      security: []
+      parameters:
+        - in: header
+          name: X-Cerberus-App-Id
+          required: false
+          schema: { type: string, format: uuid }
+        - in: header
+          name: X-Cerberus-App-Secret
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginInput' }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResult' }
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '423':
+          description: Account locked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Rotate the refresh token
+      description: |
+        Submit a refresh token, receive a new one. Reuse detection
+        mass-revokes the family. Returns a fresh accessToken too (V1.5).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string, minLength: 20, maxLength: 256 }
+      responses:
+        '200':
+          description: Token rotated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RefreshResult' }
+        '401':
+          description: Token invalid / expired / reused
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '403':
+          description: Session scoped to a different org than the app binds to
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Logout (revoke refresh token)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '204': { description: Logged out }
+
+  /v1/auth/sessions:
+    get:
+      tags: [Authentication]
+      summary: List the caller's active sessions
+      responses:
+        '200':
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/auth/sessions/{sessionId}/revoke:
+    post:
+      tags: [Authentication]
+      summary: Revoke a specific session
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId]
+              properties:
+                sessionId: { type: string, format: uuid }
+      responses:
+        '204': { description: Session revoked }
+        '403':
+          description: Cross-user revoke attempt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/oauth/token:
+    post:
+      tags: [Authentication]
+      summary: OAuth2 token endpoint (RFC 6749)
+      description: Supports password and refresh_token grants.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [password, refresh_token]
+                username: { type: string }
+                password: { type: string, format: password }
+                refresh_token: { type: string }
+                scope: { type: string }
+                client_id: { type: string }
+                client_secret: { type: string }
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: Bearer }
+                  expires_in: { type: integer, example: 900 }
+                  refresh_token: { type: string }
+                  scope: { type: string }
+
+  /v1/oauth/introspect:
+    post:
+      tags: [Authentication]
+      summary: OAuth2 token introspection (RFC 7662)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200':
+          description: Token introspection
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active: { type: boolean }
+                  sub: { type: string }
+                  org: { type: string }
+                  role: { type: string }
+                  scope: { type: string }
+                  exp: { type: integer }
+
+  /v1/oauth/revoke:
+    post:
+      tags: [Authentication]
+      summary: OAuth2 token revocation (RFC 7009)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200': { description: Token revoked (or was not valid) }
+
+  /.well-known/jwks.json:
+    get:
+      tags: [Authentication]
+      summary: JWKS document
+      description: Public keys for JWT signature verification. Rotates every 30 days.
+      security: []
+      responses:
+        '200':
+          description: JWKS
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kty: { type: string, example: RSA }
+                        kid: { type: string }
+                        alg: { type: string, example: RS256 }
+                        use: { type: string, example: sig }
+                        n: { type: string }
+                        e: { type: string, example: AQAB }
+
+  /v1/engagement/email-verification/request:
+    post:
+      tags: [Engagement]
+      summary: Request a fresh email-verification token
+      description: The token is emailed, not returned. Always returns 204.
+      responses:
+        '204': { description: Token sent }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/engagement/email-verification/confirm:
+    post:
+      tags: [Engagement]
+      summary: Confirm an email-verification token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '204': { description: Email verified }
+        '422':
+          description: Token invalid / expired / used
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/engagement/password-reset/request:
+    post:
+      tags: [Engagement]
+      summary: Request a password-reset token
+      description: Open to unauthenticated callers. Always returns 204.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '204': { description: Reset request processed }
+
+  /v1/engagement/password-reset/confirm:
+    post:
+      tags: [Engagement]
+      summary: Redeem a password-reset token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string }
+                newPassword: { type: string, minLength: 12 }
+      responses:
+        '204': { description: Password reset }
+        '422':
+          description: Token invalid / weak password
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /v1/engagement/audit-log/me:
+    get:
+      tags: [Engagement]
+      summary: The caller's own audit log
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuditLogEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/apps:
+    post:
+      tags: [Apps]
+      summary: Register a new app
+      description: Open in V1. Returns App + plaintext API key (shown EXACTLY ONCE).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterAppInput' }
+      responses:
+        '201':
+          description: App registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterAppResult' }
+
+  /v1/apps/{id}/rotate-key:
+    patch:
+      tags: [Apps]
+      summary: Rotate the app's API key
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttlSeconds: { type: integer, minimum: 1, default: 31536000 }
+      responses:
+        '200':
+          description: New key minted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RotateAppKeyResult' }
+
+  /v1/apps/{id}:
+    delete:
+      tags: [Apps]
+      summary: Soft-revoke an app
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: App revoked }
+        '404':
+          description: App not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        V1.5 JWT access tokens, signed with the current RSA signing key.
+        Get one via POST /v1/auth/login or POST /v1/oauth/token.
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DomainError' }
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DomainError' }
+    Forbidden:
+      description: Insufficient scope or cross-tenant access
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DomainError' }
+    UnprocessableEntity:
+      description: Semantic validation failure
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DomainError' }
+
+  schemas:
+    DomainError:
+      type: object
+      description: |
+        Stable error envelope. Branch on `code`, never on `message`.
+      properties:
+        code:
+          type: string
+          description: Stable namespaced code (e.g. identity.email.taken).
+        message:
+          type: string
+          description: Human-readable. Not stable.
+        details:
+          type: object
+          additionalProperties: true
+      required: [code, message]
+
+    RegisterUserInput:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 320 }
+        password: { type: string, minLength: 12, maxLength: 128, format: password }
+        displayName: { type: string, maxLength: 80 }
+        organizationSlug:
+          type: string
+          pattern: '^[a-z0-9-]{3,32}$'
+
+    RegisterUserResult:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        organizationSlug: { type: string }
+        email: { type: string, format: email }
+        autoCreatedOrg: { type: boolean }
+      required: [userId, organizationId, organizationSlug, email, autoCreatedOrg]
+
+    UpdateProfileInput:
+      type: object
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 80 }
+        clearDisplayName: { type: boolean, default: false }
+
+    ChangePasswordInput:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password }
+        newPassword: { type: string, format: password, minLength: 12, maxLength: 128 }
+
+    MfaEnrollment:
+      type: object
+      properties:
+        otpauthUrl: { type: string }
+        secret: { type: string }
+        recoveryCodes:
+          type: array
+          items: { type: string }
+      required: [otpauthUrl, secret, recoveryCodes]
+
+    MfaCodeInput:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: 6-digit TOTP code or 10-character recovery code.
+
+    VerifyMfaInput:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+        mfaToken:
+          type: string
+
+    VerifyMfaResult:
+      type: object
+      properties:
+        matched:
+          type: string
+          enum: [totp, recovery_code]
+        recoveryCodesRemaining:
+          type: integer
+
+    UserView:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string, nullable: true }
+        organizationId: { type: string, format: uuid }
+        organizationSlug: { type: string }
+        role:
+          type: string
+          enum: [OWNER, ADMIN, MEMBER]
+        mfaEnabled: { type: boolean }
+        emailVerifiedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    LoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+        userAgent: { type: string }
+        ipAddress: { type: string, format: ipv4 }
+
+    LoginResult:
+      type: object
+      properties:
+        refreshToken: { type: string }
+        accessToken:
+          type: string
+          description: 'V1.5 short-lived JWT. Send as `Authorization: Bearer <token>`.'
+        sessionId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        familyId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        organizationId: { type: string, format: uuid, nullable: true }
+        mfaRequired: { type: boolean }
+      required: [refreshToken, sessionId, userId, familyId, expiresAt, mfaRequired]
+
+    RefreshResult:
+      type: object
+      properties:
+        refreshToken: { type: string }
+        accessToken: { type: string }
+        sessionId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        familyId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        organizationId: { type: string, format: uuid, nullable: true }
+      required: [refreshToken, sessionId, familyId, expiresAt]
+
+    Session:
+      type: object
+      properties:
+        sessionId: { type: string, format: uuid }
+        deviceLabel: { type: string, nullable: true }
+        ipAddress: { type: string, nullable: true }
+        issuedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+      required: [sessionId, issuedAt, expiresAt]
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventType:
+          type: string
+          description: |
+            Stable namespaced code: identity.user.registered,
+            authentication.login.succeeded, identity.mfa.disabled,
+            admin.user.mfa_disabled, etc.
+        userId: { type: string, format: uuid, nullable: true }
+        payload: { type: object, additionalProperties: true }
+        ipAddress: { type: string, nullable: true }
+        userAgent: { type: string, nullable: true }
+        occurredAt: { type: string, format: date-time }
+      required: [id, eventType, payload, occurredAt]
+
+    RegisterAppInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 80 }
+        description: { type: string, maxLength: 500 }
+        defaultOrgSlug: { type: string }
+        contactEmail: { type: string, format: email }
+        notes: { type: string, maxLength: 500 }
+        ttlSeconds: { type: integer, minimum: 1, default: 31536000 }
+
+    RegisterAppResult:
+      type: object
+      properties:
+        app:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            description: { type: string, nullable: true }
+            defaultOrgSlug: { type: string, nullable: true }
+            contactEmail: { type: string, nullable: true }
+            notes: { type: string, nullable: true }
+            createdAt: { type: string, format: date-time }
+            revokedAt: { type: string, format: date-time, nullable: true }
+        apiKey:
+          type: string
+          description: 'Plaintext API key. Shown EXACTLY ONCE. Never retrievable.'
+      required: [app, apiKey]
+
+    RotateAppKeyResult:
+      type: object
+      properties:
+        appId: { type: string, format: uuid }
+        apiKey:
+          type: string
+          description: 'New plaintext key. Shown ONCE.'
+      required: [appId, apiKey]

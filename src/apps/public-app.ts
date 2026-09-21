@@ -3,6 +3,9 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { RequestMethod } from '@nestjs/common';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { apiReference } from '@scalar/nestjs-api-reference';
 import { AppModule } from '../app.module';
 import { GraphqlDomainErrorFilter } from '../graphql/graphql-domain-error.filter';
 
@@ -10,7 +13,8 @@ import { GraphqlDomainErrorFilter } from '../graphql/graphql-domain-error.filter
  * Bootstrap the public-facing NestApplication.
  *
  * Mounts: `/health`, `/ready`, `/.well-known/jwks.json`, all `/v1/*`
- * routes (identity / auth / OAuth / engagement), and `/graphql`.
+ * routes (identity / auth / OAuth / engagement), `/graphql`, and the
+ * Scalar API reference at `/api-docs`.
  *
  * Listens on `PORT` (default 3000).
  */
@@ -33,8 +37,8 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
     }),
   );
 
-  // Routes are versioned under /v1. Health, readiness, JWKS, and
-  // GraphQL are intentionally unversioned.
+  // Routes are versioned under /v1. Health, readiness, JWKS, Scalar,
+  // and GraphQL are intentionally unversioned.
   app.setGlobalPrefix('v1', {
     exclude: [
       { path: 'health', method: RequestMethod.GET },
@@ -42,6 +46,30 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
       { path: '.well-known/jwks.json', method: RequestMethod.GET },
     ],
   });
+
+  // Scalar API reference. Reads the OpenAPI 3.1 spec from disk
+  // (copied to dist/ at build time by scripts/copy-openapi.js).
+  // V1.5 uses bearer JWT — pre-fill the auth UI so "Authorize" works
+  // out of the box.
+  app.use(
+    '/api-docs',
+    apiReference({
+      spec: {
+        content: readFileSync(
+          join(process.cwd(), 'dist', 'openapi.yaml'),
+          'utf8',
+        ),
+        title: 'Cerberus Authentication API',
+      },
+      meta: {
+        title: 'Cerberus API Reference',
+      },
+      authentication: {
+        preferredSecurityScheme: 'bearerAuth',
+        securitySchemePersistent: true,
+      },
+    }),
+  );
 
   return app;
 }

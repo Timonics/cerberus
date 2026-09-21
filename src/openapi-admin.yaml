@@ -1,0 +1,339 @@
+openapi: 3.1.0
+info:
+  title: Cerberus Administration API
+  version: 1.5.0
+  description: |
+    Admin-facing endpoints on the separate listener (port 3001).
+    IP-allowlist + admin API-key auth required.
+
+    Most user-facing endpoints (register / login / etc.) live on the
+    public listener and are documented at `/api-docs` of the same host
+    on port 3000.
+
+  contact:
+    name: Cerberus
+    url: 'https://github.com/Timonics/cerberus'
+
+servers:
+  - url: 'http://localhost:3001'
+    description: Local dev (admin listener)
+
+tags:
+  - name: AdminHealth
+    description: Liveness probe.
+  - name: AdminApiKeys
+    description: Admin API key issuance + revocation.
+  - name: AdminUsers
+    description: Admin override on user accounts.
+  - name: AdminAudit
+    description: Audit log search.
+
+security:
+  - adminApiKey: []
+  - {}
+
+paths:
+  /admin/health:
+    get:
+      tags: [AdminHealth]
+      summary: Admin surface liveness
+      description: Unauthenticated. Returns 200 with `status=ok`.
+      security: []
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  surface: { type: string, example: admin }
+
+  /admin/api-keys:
+    post:
+      tags: [AdminApiKeys]
+      summary: Issue a new admin API key
+      description: |
+        Generates a 32-byte plaintext, hashes with argon2id, persists
+        the hash. Returns BOTH the aggregate and the plaintext ONCE.
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+          description: Current admin API key. Must come from the IP allowlist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueAdminApiKeyInput' }
+      responses:
+        '201':
+          description: New key issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssueAdminApiKeyResult' }
+        '401':
+          description: Admin key missing or invalid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '403':
+          description: IP not in allowlist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+    get:
+      tags: [AdminApiKeys]
+      summary: List admin API keys
+      description: V1 returns an empty list (full list use-case deferred to V1.5).
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Admin API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminApiKey' }
+
+  /admin/api-keys/{id}:
+    delete:
+      tags: [AdminApiKeys]
+      summary: Revoke an admin API key
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Key revoked }
+        '404':
+          description: Key not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /admin/users/{id}:
+    get:
+      tags: [AdminUsers]
+      summary: Look up a user (admin view)
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: User
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserView' }
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /admin/users/{id}/disable-mfa:
+    post:
+      tags: [AdminUsers]
+      summary: Admin override — disable a user's MFA
+      description: |
+        Bypasses the user's TOTP. Writes `admin.user.mfa_disabled` to the
+        audit log with the adminKeyId as metadata. Used to recover
+        accounts where the user lost their authenticator device.
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, description: Free-form operator note. }
+      responses:
+        '200':
+          description: MFA disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId: { type: string, format: uuid }
+                  adminKeyId: { type: string, format: uuid }
+                  occurredAt: { type: string, format: date-time }
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /admin/audit-log:
+    get:
+      tags: [AdminAudit]
+      summary: Search the audit log
+      description: At least one of `userId` or `eventType` is required to prevent unbounded scans.
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+        - in: query
+          name: userId
+          required: false
+          schema: { type: string, format: uuid }
+        - in: query
+          name: eventType
+          required: false
+          schema: { type: string }
+          description: 'Stable code: e.g. `identity.user.registered`.'
+        - in: query
+          name: from
+          required: false
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          required: false
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - in: query
+          name: offset
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Audit log entries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAuditLogResult' }
+        '400':
+          description: Missing filter or out-of-range limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+components:
+  securitySchemes:
+    adminApiKey:
+      type: apiKey
+      in: header
+      name: X-Cerberus-Admin-Api-Key
+      description: |
+        Admin API key. Currently requires the IP allowlist (CIDR list
+        in ADMIN_IP_ALLOWLIST env var). V1.5 will add separate
+        scope-checking on the key itself.
+
+  schemas:
+    DomainError:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+      required: [code, message]
+
+    IssueAdminApiKeyInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 80 }
+        ttlSeconds: { type: integer, minimum: 1, default: 31536000 }
+        notes: { type: string, maxLength: 500 }
+
+    IssueAdminApiKeyResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        role:
+          type: string
+          enum: [ADMIN, SUPER_ADMIN]
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        createdBy: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        apiKey:
+          type: string
+          description: 'Plaintext API key. Shown EXACTLY ONCE.'
+      required: [id, name, role, createdAt, apiKey]
+
+    AdminApiKey:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        role:
+          type: string
+          enum: [ADMIN, SUPER_ADMIN]
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        revokedReason: { type: string, nullable: true }
+        createdBy: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    AdminUserView:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string, nullable: true }
+        organizationId: { type: string, format: uuid }
+        role:
+          type: string
+          enum: [OWNER, ADMIN, MEMBER]
+        mfaEnabled: { type: boolean }
+        emailVerifiedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    AdminAuditLogResult:
+      type: object
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/AuditLogEntry' }
+        total: { type: integer }
+        hasMore: { type: boolean }
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventType: { type: string }
+        userId: { type: string, format: uuid, nullable: true }
+        payload: { type: object, additionalProperties: true }
+        ipAddress: { type: string, nullable: true }
+        userAgent: { type: string, nullable: true }
+        occurredAt: { type: string, format: date-time }
+      required: [id, eventType, payload, occurredAt]
