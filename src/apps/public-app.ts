@@ -6,6 +6,7 @@ import { RequestMethod } from '@nestjs/common';
 import type { Request, Response, NextFunction } from 'express';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AppModule } from '../app.module';
+import { GraphqlDomainErrorFilter } from '../graphql/graphql-domain-error.filter';
 import { readArtifact } from '../common/artifact-loader';
 
 /**
@@ -61,6 +62,12 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
       transform: true,
     }),
   );
+
+  // V1.5 (audit L-5 follow-on): register the GraphQL domain-error
+  // filter so DomainError.code surfaces as `extensions.code` on the
+  // GraphQL response — without this, resolvers' DomainErrors get
+  // wrapped in INTERNAL_SERVER_ERROR and the `domainCode` is lost.
+  app.useGlobalFilters(new GraphqlDomainErrorFilter());
 
   // Routes are versioned under /v1. Health, readiness, JWKS, Scalar,
   // and GraphQL are intentionally unversioned.
