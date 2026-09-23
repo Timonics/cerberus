@@ -28,6 +28,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # CI uses Node 20 to match the project's `engines.node` field.
+  # Scalar requires Node 22+ locally; we ship Scalar as a warning-tier
+  # dependency and don't enforce Node 22 yet.
+  NODE_VERSION: '20'
   # Default ports inside the CI runner (different from local dev so
   # jobs don't collide). Postgres + Redis run as service containers.
   DATABASE_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
@@ -230,16 +234,22 @@ jobs:
 
   # --------------------------------------------------------------------------
   # Future: separate `test` job that spins up Postgres + Redis with seeded
-  # migrations and runs `npm test`. Currently empty because the project
-  # has no test files. Drop the `continue-on-error: true` when tests land.
+  # migrations and runs integration tests. Currently `npm test` runs the
+  # pure-domain contract suite (jest with *.spec.ts under src/). Add
+  # integration tests under `test/` and split into `test:unit` / `test:e2e`.
   # --------------------------------------------------------------------------
   test:
-    name: Tests (placeholder)
+    name: Tests
     runs-on: ubuntu-latest
     needs: ci
-    continue-on-error: true
     steps:
-      - name: 'Test suite pending'
-        run: |
-          echo "No test files in test/. Drop 'npm test' here when present."
-          exit 0
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+      - name: 'Set up Node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 'Install dependencies'
+        run: npm ci --legacy-peer-deps
+      - name: 'Run unit tests'
+        run: npm test
