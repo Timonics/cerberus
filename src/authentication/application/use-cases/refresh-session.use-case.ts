@@ -12,6 +12,7 @@ import {
   Tx,
 } from '../../../shared/domain';
 import { SessionRefreshed } from '../../domain/events/auth.events';
+import { Session } from '../../domain/aggregates/session';
 import {
   REFRESH_TOKEN_GENERATOR,
   RefreshTokenGenerator,
@@ -183,16 +184,51 @@ export class RefreshSessionUseCase {
       }
 
       // First presentation of this hash (legitimate rotation).
+      // V1.5 (audit H-1): the rotation write is now atomic — it
+      // compares on the current hash and refuses to rotate if
+      // another concurrent rotation has already moved the row.
+      // Concurrent races are detected here as "reuse" because the
+      // other rotation would have changed the refreshHash column,
+      // causing our updateMany WHERE to match zero rows.
       const newPlaintext = this.refreshTokenGen.generate();
       const newHash = await RefreshTokenHash.fromPlaintext(newPlaintext);
+      const now = this.clock.now();
+      const newExpiresAt = new Date(
+        now.getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000,
+      );
       const rotated = existing.rotateRefreshToken({
         newRefreshHash: newHash,
         clock: this.clock,
-        newExpiresAt: new Date(
-          this.clock.now().getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000,
-        ),
+        newExpiresAt,
       });
-      const saved = await this.sessionRepo.save(tx, rotated);
+      const swapped = await this.sessionRepo.rotateRefreshTokenAtomic(
+        tx,
+        presentedHash.value,
+        {
+          refreshHash: newHash.value,
+          expiresAt: newExpiresAt,
+          lastUsedAt: now,
+          previousRefreshHashes: rotated.previousRefreshHashes,
+        },
+      );
+      if (!swapped) {
+        // Someone else rotated first — treat as reuse, mass-revoke.
+        await this.sessionRepo.revokeAllInFamily(
+          tx,
+          existing.familyId,
+          'FAMILY_COMPROMISED',
+        );
+        throw new DomainError(
+          'authentication.session.not_found',
+          'Refresh token is not recognized',
+        );
+      }
+      const saved = Session.fromPersistence({
+        ...rotated,
+        mfaVerified: existing.mfaVerified,
+        revokedAt: null,
+        revokeReason: null,
+      });
 
       await this.eventBus.publishAll([
         new SessionRefreshed(

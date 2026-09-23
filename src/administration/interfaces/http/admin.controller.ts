@@ -89,6 +89,12 @@ export class AdminController {
     const adminKeyId = getAdminKeyId(req);
     const result = await this.adminDisableMfaUc.execute({
       userId: id,
+      // V1.5 (audit C-1): REST admin surface uses admin API key auth
+      // (not a JWT user), so callerUserId is null. The use-case skips
+      // the org-match check in this branch — that's by design: the
+      // REST admin can operate globally because it's already gated by
+      // IP allowlist + admin API key.
+      callerUserId: null,
       adminKeyId,
       reason: body.reason,
     });

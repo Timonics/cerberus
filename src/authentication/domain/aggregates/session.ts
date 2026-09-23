@@ -68,6 +68,14 @@ export class Session {
      * of an old hash is theft.
      */
     public readonly previousRefreshHashes: ReadonlyArray<string>,
+    /**
+     * V1.5 (audit C-4): tracks whether the user has completed MFA
+     * verification for this session. False on creation when the user
+     * has MFA enabled; flipped to true by VerifySecondFactorUseCase.
+     * The OAuth password/refresh grants refuse to issue an access
+     * token until this is true.
+     */
+    public readonly mfaVerified: boolean,
     public readonly revokedAt: Date | null,
     public readonly revokeReason: RevokeReason | null,
     private readonly pendingEvents: DomainEvent[],
@@ -97,6 +105,15 @@ export class Session {
     organizationId: OrgId | null;
     clock: Clock;
     ttlSeconds: number;
+    /**
+     * V1.5 (audit C-4): whether the user has MFA enabled at session
+     * creation. When true, mfaVerified is false — the user must call
+     * POST /v1/identity/mfa/verify before the OAuth password/refresh
+     * grants will mint an access token. When false, mfaVerified is
+     * true (no MFA = nothing to verify, session is "verified" by
+     * definition).
+     */
+    requiresMfa: boolean;
   }): Session {
     const now = params.clock.now();
     const expiresAt = new Date(now.getTime() + params.ttlSeconds * 1000);
@@ -121,6 +138,7 @@ export class Session {
       expiresAt,
       null, // lastUsedAt — null on first creation
       [], // previousRefreshHashes — fresh session
+      !params.requiresMfa, // mfaVerified: true if no MFA required
       null, // revokedAt — null on first creation
       null, // revokeReason — null on first creation
       [], // pendingEvents — sessions don't emit events on creation
@@ -141,6 +159,9 @@ export class Session {
     lastUsedAt: Date | null;
     /** V1.5: chain of rotated-hashes for reuse detection. */
     previousRefreshHashes?: ReadonlyArray<string>;
+    /** V1.5 (audit C-4): MFA-verified flag. Defaults to true so legacy
+     *  sessions (pre-V1.5 schema) are still treated as verified. */
+    mfaVerified?: boolean;
     revokedAt: Date | null;
     revokeReason: RevokeReason | null;
   }): Session {
@@ -157,6 +178,7 @@ export class Session {
       params.expiresAt,
       params.lastUsedAt,
       params.previousRefreshHashes ?? [],
+      params.mfaVerified ?? true, // legacy sessions are pre-verified
       params.revokedAt,
       params.revokeReason,
       [],
@@ -211,6 +233,7 @@ export class Session {
       params.newExpiresAt,
       now,
       newPrevious,
+      this.mfaVerified, // V1.5 (audit C-4): preserves across rotation
       null, // revokedAt — rotation only happens on live sessions
       null, // revokeReason — null while alive
       this.pendingEvents,
@@ -251,6 +274,7 @@ export class Session {
       this.expiresAt,
       this.lastUsedAt,
       this.previousRefreshHashes,
+      this.mfaVerified, // V1.5: revoked sessions preserve the flag for audit
       now,
       reason,
       this.pendingEvents,
@@ -261,6 +285,41 @@ export class Session {
   public isAliveAt(when: Date): boolean {
     if (this.revokedAt !== null) return false;
     return this.expiresAt.getTime() > when.getTime();
+  }
+
+  /**
+   * V1.5 (audit C-4): mark this session as MFA-verified. Called by
+   * VerifySecondFactorUseCase after a successful TOTP / recovery-code
+   * match. Idempotent — calling twice is a no-op. Throws if the
+   * session is revoked (you can't un-revoke by verifying).
+   */
+  public markMfaVerified(): Session {
+    if (this.revokedAt !== null) {
+      throw new DomainError(
+        'authentication.session.revoked',
+        'Cannot mark MFA-verified on a revoked session',
+        { sessionId: this.id.value },
+      );
+    }
+    if (this.mfaVerified) return this; // idempotent
+    return new Session(
+      this.id,
+      this.userId,
+      this.familyId,
+      this.refreshHash,
+      this.userAgent,
+      this.ipAddress,
+      this.deviceLabel,
+      this.organizationId,
+      this.issuedAt,
+      this.expiresAt,
+      this.lastUsedAt,
+      this.previousRefreshHashes,
+      true, // mfaVerified
+      this.revokedAt,
+      this.revokeReason,
+      this.pendingEvents,
+    );
   }
 
   public pullDomainEvents(): DomainEvent[] {

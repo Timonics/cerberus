@@ -50,6 +50,7 @@ export type DomainErrorCode =
   | 'admin.ip_not_allowed'
   | 'admin.auth.missing'
   | 'admin.auth.invalid'
+  | 'admin.forbidden'
   | 'admin.audit.search.too_broad'
   | 'admin.audit.search.invalid_int'
   | 'admin.audit.search.out_of_range'

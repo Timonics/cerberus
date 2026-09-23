@@ -55,7 +55,8 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: false,
+      // V1.5 (audit L-3): see public-app.ts. REST-only change.
+      forbidNonWhitelisted: true,
       transform: true,
     }),
   );

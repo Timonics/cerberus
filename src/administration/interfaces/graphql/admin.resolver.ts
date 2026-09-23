@@ -73,11 +73,12 @@ export class AdminGraphqlResolver {
     @Args('input')
     input: { userId: string; adminKeyId?: string; reason?: string },
   ): Promise<unknown> {
+    // V1.5 (audit C-1): the use-case resolves the caller's org
+    // internally from the JWT `sub`. It rejects if the target
+    // belongs to a different org, blocking cross-tenant IDOR.
     const result = await this.disableMfaUc.execute({
       userId: input.userId,
-      // GraphQL path — no admin API key, audit row still recorded
-      // with adminKeyId: null. SUPER_ADMIN operators can supply
-      // their key id here if they want it tracked.
+      callerUserId: user.sub,
       adminKeyId: input.adminKeyId ?? null,
       reason: input.reason ?? null,
     });

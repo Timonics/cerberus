@@ -255,6 +255,13 @@ model Session {
   /// legitimate user already has the rotated token, so a re-presentation
   /// of an old hash is theft.
   previousRefreshHashes String[] @default([])
+  /// V1.5 (audit C-4): tracks whether the user has completed MFA
+  /// verification for this session. False on creation when the user
+  /// has MFA enabled; flipped to true by VerifySecondFactorUseCase.
+  /// The OAuth password/refresh grants refuse to issue an access
+  /// token until this is true — otherwise a stolen password is
+  /// sufficient to mint a JWT.
+  mfaVerified   Boolean      @default(false)
   revokedAt     DateTime?
   /// Reason recorded on revoke; null while the session is alive.
   revokeReason RevokeReason?

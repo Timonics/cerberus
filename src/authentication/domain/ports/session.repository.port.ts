@@ -47,6 +47,38 @@ export abstract class SessionRepository extends BaseRepository<
     userId: UserId,
     reason: 'PASSWORD_CHANGED' | 'ADMIN_REVOKED',
   ): Promise<number>;
+
+  /**
+   * V1.5 (audit C-4): flip mfaVerified to true on a specific
+   * session. Used by VerifySecondFactorUseCase. Returns the updated
+   * session so the caller can include session metadata in the audit.
+   */
+  public abstract markMfaVerified(
+    tx: Tx,
+    sessionId: SessionId,
+  ): Promise<Session | null>;
+
+  /**
+   * V1.5 (audit H-1): atomic compare-and-swap rotation. Refuses
+   * to rotate unless the current row's `refreshHash` equals
+   * `currentHash`. Returns true if the rotation succeeded, false
+   * if another concurrent rotation already wrote (in which case the
+   * caller treats it as reuse detection).
+   *
+   * This is the only safe way to rotate refresh tokens under Prisma's
+   * default READ COMMITTED isolation — a non-atomic read-then-write
+   * allows two concurrent rotations to both succeed.
+   */
+  public abstract rotateRefreshTokenAtomic(
+    tx: Tx,
+    currentHash: string,
+    next: {
+      refreshHash: string;
+      expiresAt: Date;
+      lastUsedAt: Date;
+      previousRefreshHashes: ReadonlyArray<string>;
+    },
+  ): Promise<boolean>;
 }
 
 export const SESSION_REPOSITORY = Symbol('SessionRepository');

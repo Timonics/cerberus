@@ -111,6 +111,20 @@ export class OAuthController {
         password: body.password,
         appDefaultOrgSlug,
       });
+      // V1.5 (audit C-4): if the session requires MFA, refuse to
+      // issue an access token via the OAuth password grant. The user
+      // must use the REST /v1/auth/login endpoint (which returns
+      // mfaRequired: true) or the REST /v1/identity/mfa/verify flow.
+      // Without this, a stolen password is sufficient to mint a JWT.
+      if (loginResult.mfaRequired) {
+        res.status(HttpStatus.FORBIDDEN).json({
+          error: 'mfa_required',
+          error_description:
+            'Multi-factor authentication required; call POST /v1/auth/login or POST /v1/identity/mfa/verify first',
+          session_id: loginResult.sessionId,
+        });
+        return;
+      }
       const issued = await this.issueAccessTokenUc.execute({
         userId: loginResult.userId,
         organizationSlug:

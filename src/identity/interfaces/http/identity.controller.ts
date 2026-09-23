@@ -177,6 +177,7 @@ export class IdentityController {
   ) {
     return this.verifySecondFactorUc.execute({
       userId: principal.userId,
+      sessionId: body.sessionId,
       code: body.code,
     });
   }

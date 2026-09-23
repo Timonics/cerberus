@@ -233,6 +233,7 @@ export class IdentityResolver {
   ) {
     const matched = await this.verify2faUc.execute({
       userId: user.sub,
+      sessionId: input.sessionId,
       code: input.code,
     });
     return { matched };

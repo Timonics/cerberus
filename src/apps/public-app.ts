@@ -6,7 +6,6 @@ import { RequestMethod } from '@nestjs/common';
 import type { Request, Response, NextFunction } from 'express';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AppModule } from '../app.module';
-import { GraphqlDomainErrorFilter } from '../graphql/graphql-domain-error.filter';
 import { readArtifact } from '../common/artifact-loader';
 
 /**
@@ -51,7 +50,14 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: false,
+      // V1.5 (audit L-3): reject unknown body fields. The previous
+      // setting silently dropped them, which hides contract drift
+      // (e.g. a client typo `passwrod` instead of `password` would
+      // result in an empty string and a confusing "invalid password"
+      // error instead of "unknown field"). GraphQL inputs bypass
+      // this pipe via their own @Args() binding so the change is
+      // REST-only.
+      forbidNonWhitelisted: true,
       transform: true,
     }),
   );
@@ -89,5 +95,3 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
 
   return app;
 }
-
-void GraphqlDomainErrorFilter;

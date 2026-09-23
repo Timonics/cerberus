@@ -44,6 +44,8 @@ export interface MfaCodeInput extends AnyInput {
 
 export interface VerifyMfaInput extends AnyInput {
   code: string;
+  /** V1.5 (audit C-4): sessionId of the session to mark MFA-verified. */
+  sessionId: string;
 }
 
 export interface RequestPasswordResetInput extends AnyInput {

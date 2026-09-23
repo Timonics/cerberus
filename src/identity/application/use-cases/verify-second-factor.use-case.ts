@@ -5,6 +5,11 @@ import {
   TransactionRunner,
 } from '../../../shared/domain';
 import { UserId } from '../../domain/value-objects/user-id';
+import { SessionId } from '../../../authentication/domain/value-objects/session-id';
+import {
+  SESSION_REPOSITORY,
+  SessionRepository,
+} from '../../../authentication/domain/ports/session.repository.port';
 import {
   MFA_SECRET_REPOSITORY,
   MfaSecretRepository,
@@ -15,6 +20,14 @@ import * as argon2 from 'argon2';
 export interface VerifySecondFactorInput {
   userId: string;
   /**
+   * The session to mark MFA-verified. V1 supports at most one
+   * session per user, but the use-case marks the named session
+   * explicitly so we don't have to guess. The caller (REST verify
+   * endpoint or OAuth password grant) supplies the sessionId that
+   * came from the login response.
+   */
+  sessionId: string;
+  /**
    * Either a 6-digit TOTP code (from the authenticator) OR a recovery
    * code (10 chars, Crockford-base32). The use-case detects which it is
    * by length.
@@ -24,6 +37,8 @@ export interface VerifySecondFactorInput {
 
 export interface VerifySecondFactorResult {
   matched: 'totp' | 'recovery';
+  /** The session that was marked verified. */
+  sessionId: string;
 }
 
 /**
@@ -43,6 +58,8 @@ export class VerifySecondFactorUseCase {
     @Inject(TRANSACTION_RUNNER) private readonly txRunner: TransactionRunner,
     @Inject(MFA_SECRET_REPOSITORY)
     private readonly mfaRepo: MfaSecretRepository,
+    @Inject(SESSION_REPOSITORY)
+    private readonly sessionRepo: SessionRepository,
     private readonly totp: TotpService,
   ) {}
 
@@ -50,6 +67,7 @@ export class VerifySecondFactorUseCase {
     input: VerifySecondFactorInput,
   ): Promise<VerifySecondFactorResult> {
     const userId = UserId.create(input.userId);
+    const sessionId = SessionId.create(input.sessionId);
     const trimmed = input.code.trim();
 
     return this.txRunner.run(async (tx) => {
@@ -70,7 +88,21 @@ export class VerifySecondFactorUseCase {
           this.totp.verifyTotp(s, c),
         );
         if (ok) {
-          return { matched: 'totp' as const };
+          // V1.5 (audit C-4): mark the session as MFA-verified so the
+          // OAuth password / refresh grants will mint an access token.
+          // We look up by sessionId first; if the session is already
+          // revoked or doesn't exist, throw — same shape as login.
+          const verified = await this.sessionRepo.markMfaVerified(
+            tx,
+            sessionId,
+          );
+          if (!verified) {
+            throw new DomainError(
+              'authentication.session.not_found',
+              'Session not found or revoked',
+            );
+          }
+          return { matched: 'totp' as const, sessionId: input.sessionId };
         }
         throw new DomainError(
           'identity.mfa.code_invalid',
@@ -92,7 +124,21 @@ export class VerifySecondFactorUseCase {
         });
         if (result.matched) {
           await this.mfaRepo.save(tx, result.updated);
-          return { matched: 'recovery' as const };
+          // V1.5 (audit C-4): same — mark session verified.
+          const verified = await this.sessionRepo.markMfaVerified(
+            tx,
+            sessionId,
+          );
+          if (!verified) {
+            throw new DomainError(
+              'authentication.session.not_found',
+              'Session not found or revoked',
+            );
+          }
+          return {
+            matched: 'recovery' as const,
+            sessionId: input.sessionId,
+          };
         }
         if (result.alreadyUsed) {
           throw new DomainError(

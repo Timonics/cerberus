@@ -171,9 +171,39 @@ export class LoginUseCase {
       return { user, credential };
     });
 
-    // Constant-time-ish check: verify against a dummy hash if the user
-    // doesn't exist, so we don't leak account existence via timing.
-    // (For V1 we just go through the normal path — timing leak is small.)
+    // Constant-time-ish check: verify against a dummy hash if the
+    // user doesn't exist, so account-existence is not leaked via
+    // timing. V1.5 (audit M-3): the previous code skipped argon2
+    // entirely on the unknown-user path (~50ms shorter response),
+    // which a timing-attack client could detect.
+    //
+    // We always perform exactly one argon2.verify call. The dummy
+    // hash is a real argon2id-formatted string that will return
+    // `false` for any plaintext — it exists so the verify path
+    // takes the same ~50ms regardless of user existence. Argon2's
+    // own `verify()` swallows the malformed-hash error in
+    // Argon2PasswordHasher.verify() and returns `false`.
+    const DUMMY_HASH =
+      '$argon2id$v=19$m=65536,t=3,p=1$ZHVtbXlzYWx0Zm9yY29uc3RhbnR0aW1l' +
+      'Y2hlY2tpbmcAAAAAAAAAAAA$ZPrQq5Z0qJD8m4lpqkS5eZ6xv7h8y9a0b1c2d3e4f5g';
+
+    // Always do exactly one argon2 verify call. The dummy hash is
+    // syntactically-valid argon2id; the actual verify returns `false`
+    // for any plaintext because the salt doesn't match. The
+    // Argon2PasswordHasher swallows any malformed-input exception
+    // and returns `false`, so even a malformed dummy would work,
+    // but a syntactically valid one is more robust.
+    let passwordOk = false;
+    if (lookup.user !== null && lookup.credential !== null) {
+      passwordOk = await this.passwordHasher.verify(
+        input.password,
+        lookup.credential.passwordHash.value,
+      );
+    } else {
+      // Equalize timing — exactly one argon2 call.
+      await this.passwordHasher.verify(input.password, DUMMY_HASH);
+    }
+
     if (!lookup.user || !lookup.credential) {
       await this.recordFailure(normalizedEmail, ip.value);
       throw new DomainError(
@@ -184,11 +214,6 @@ export class LoginUseCase {
 
     const { user, credential } = lookup;
 
-    // Verify the password. argon2.verify is constant-time internally.
-    const passwordOk = await this.passwordHasher.verify(
-      input.password,
-      credential.passwordHash.value,
-    );
     if (!passwordOk) {
       await this.recordFailure(normalizedEmail, ip.value);
       // After recording, see if this push over a tier triggered a lockout.
@@ -262,6 +287,12 @@ export class LoginUseCase {
       ),
       clock: this.clock,
       ttlSeconds: REFRESH_TOKEN_TTL_SECONDS,
+      // V1.5 (audit C-4): when the user has MFA enabled, the session
+      // is created with mfaVerified=false. The user must call
+      // POST /v1/identity/mfa/verify before the OAuth password grant
+      // will mint an access token. Without this, a stolen password
+      // alone is enough to mint a JWT (audit C-4).
+      requiresMfa,
     });
 
     const saved = await this.txRunner.run<{ session: Session }>(

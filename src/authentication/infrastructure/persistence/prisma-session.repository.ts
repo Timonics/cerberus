@@ -74,6 +74,7 @@ export class PrismaSessionRepository extends SessionRepository {
       expiresAt: session.expiresAt,
       lastUsedAt: session.lastUsedAt,
       previousRefreshHashes: [...session.previousRefreshHashes],
+      mfaVerified: session.mfaVerified,
       revokedAt: session.revokedAt,
       revokeReason: session.revokeReason,
     };
@@ -85,11 +86,58 @@ export class PrismaSessionRepository extends SessionRepository {
         expiresAt: data.expiresAt,
         lastUsedAt: data.lastUsedAt,
         previousRefreshHashes: data.previousRefreshHashes,
+        mfaVerified: data.mfaVerified,
         revokedAt: data.revokedAt,
         revokeReason: data.revokeReason,
       },
     });
     return this.toDomain(row);
+  }
+
+  public async markMfaVerified(
+    tx: Tx,
+    sessionId: SessionId,
+  ): Promise<Session | null> {
+    const client = tx as PrismaTx;
+    const row = await client.session.update({
+      where: { id: sessionId.value },
+      data: { mfaVerified: true },
+    });
+    return this.toDomain(row);
+  }
+
+  public async rotateRefreshTokenAtomic(
+    tx: Tx,
+    currentHash: string,
+    next: {
+      refreshHash: string;
+      expiresAt: Date;
+      lastUsedAt: Date;
+      previousRefreshHashes: ReadonlyArray<string>;
+    },
+  ): Promise<boolean> {
+    const client = tx as PrismaTx;
+    // Prisma's updateMany is the only safe way to do this atomically:
+    // it issues a single UPDATE ... WHERE refreshHash = $current,
+    // and the database applies it in one statement. Under READ
+    // COMMITTED, two concurrent rotations can both pass an earlier
+    // findByRefreshHash() check, but only one updateMany succeeds —
+    // the second's WHERE clause sees the new hash and updates zero
+    // rows. count === 0 ⇒ reuse detected.
+    const result = await client.session.updateMany({
+      where: {
+        refreshHash: currentHash,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: {
+        refreshHash: next.refreshHash,
+        expiresAt: next.expiresAt,
+        lastUsedAt: next.lastUsedAt,
+        previousRefreshHashes: [...next.previousRefreshHashes],
+      },
+    });
+    return result.count === 1;
   }
 
   public async delete(tx: Tx, id: SessionId): Promise<void> {
@@ -137,6 +185,9 @@ export class PrismaSessionRepository extends SessionRepository {
     lastUsedAt: Date | null;
     /** V1.5: chain of rotated refresh-token hashes (reuse detection). */
     previousRefreshHashes?: string[];
+    /** V1.5 (audit C-4): MFA-verified flag. Defaults to true so legacy
+     *  sessions (pre-V1.5 schema) are still treated as verified. */
+    mfaVerified?: boolean;
     revokedAt: Date | null;
     revokeReason: string | null;
   }): Session {
@@ -155,6 +206,7 @@ export class PrismaSessionRepository extends SessionRepository {
       expiresAt: row.expiresAt,
       lastUsedAt: row.lastUsedAt,
       previousRefreshHashes: row.previousRefreshHashes ?? [],
+      mfaVerified: row.mfaVerified ?? true,
       revokedAt: row.revokedAt,
       revokeReason:
         row.revokeReason && isRevokeReason(row.revokeReason)

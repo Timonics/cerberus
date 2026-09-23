@@ -85,6 +85,20 @@ export class RefreshTokenGrantUseCase {
       );
     }
 
+    // V1.5 (audit C-4): if the session requires MFA and hasn't been
+    // verified yet, refuse to issue a fresh access token. The user
+    // must call POST /v1/identity/mfa/verify with the sessionId and
+    // their TOTP / recovery code first. This closes the OAuth2
+    // refresh-token path that previously allowed bypassing MFA after
+    // capturing a stolen password.
+    if (!session.mfaVerified) {
+      throw new DomainError(
+        'authorization.token.invalid',
+        'Multi-factor authentication required; verify MFA on this session before refreshing',
+        { sessionId: session.id.value },
+      );
+    }
+
     const userId: UserId = session.userId;
 
     const issued = await this.issueAccessTokenUc.execute({

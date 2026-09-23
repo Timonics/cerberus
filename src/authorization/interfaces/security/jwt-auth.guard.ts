@@ -88,11 +88,15 @@ export class JwtAuthGuard implements CanActivate {
         audience,
       });
     } catch (err) {
+      // V1.5 (audit L-5): log the underlying jose error server-side
+      // but DO NOT include it in the DomainError metadata — the
+      // response body echoes `meta.reason` and we don't want to leak
+      // jose internals ("JWT expired", "issuer mismatch", etc.) to
+      // an attacker probing the token surface.
       JwtAuthGuard.logger.warn(`JWT verification failed: ${String(err)}`);
       throw new DomainError(
         'authorization.token.invalid',
         'JWT verification failed',
-        { reason: String(err) },
       );
     }
 
