@@ -242,6 +242,33 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     needs: ci
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cerberus
+          POSTGRES_PASSWORD: cerberus
+          POSTGRES_DB: cerberus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
+      REDIS_URL: 'redis://localhost:6379'
+      NODE_ENV: 'test'
     steps:
       - name: 'Checkout'
         uses: actions/checkout@v4
@@ -251,5 +278,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - name: 'Install dependencies'
         run: npm ci --legacy-peer-deps
+      - name: 'Apply migrations'
+        run: npx prisma migrate deploy
       - name: 'Run unit tests'
         run: npm test
+      - name: 'Run integration tests'
+        run: npm run test:e2e
