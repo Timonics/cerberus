@@ -20,6 +20,7 @@ import { VerifySecondFactorUseCase } from '../../application/use-cases/verify-se
 import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/verify-app-api-key.use-case';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MfaCodeDto } from './dto/mfa-code.dto';
+import { ConfirmMfaDto } from './dto/confirm-mfa.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public } from '../../../authorization/interfaces/security/public.decorator';
@@ -145,7 +146,7 @@ export class IdentityController {
   @HttpCode(HttpStatus.NO_CONTENT)
   public async confirmMfa(
     @CurrentUser() principal: UserPrincipal,
-    @Body() body: MfaCodeDto,
+    @Body() body: ConfirmMfaDto,
   ): Promise<void> {
     await this.confirmMfaUc.execute({
       userId: principal.userId,
@@ -159,7 +160,7 @@ export class IdentityController {
   @HttpCode(HttpStatus.NO_CONTENT)
   public async disableMfa(
     @CurrentUser() principal: UserPrincipal,
-    @Body() body: MfaCodeDto,
+    @Body() body: ConfirmMfaDto,
   ): Promise<void> {
     await this.disableMfaUc.execute({
       userId: principal.userId,

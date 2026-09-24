@@ -8,6 +8,7 @@ import { AppConfig } from '../config/configuration';
 import { AuthorizationModule } from '../authorization/authorization.module';
 import { GraphqlContext, populateGraphqlAuth } from './graphql-context';
 import { VerifyAccessTokenUseCase } from '../authorization/application/use-cases/verify-access-token.use-case';
+import { GraphqlDomainErrorFilter } from './graphql-domain-error.filter';
 
 /**
  * GraphQL module.
@@ -52,6 +53,12 @@ import { VerifyAccessTokenUseCase } from '../authorization/application/use-cases
           playground: playgroundEnabled,
           introspection: introspectionEnabled,
           plugins: [],
+          // V1.5 (audit L-5): register the GqlExceptionFilter for
+          // DomainError so resolvers' errors surface with stable
+          // extensions.code (and .domainCode). Without this,
+          // Apollo's default handler wraps uncaught errors in
+          // INTERNAL_SERVER_ERROR and the domainCode is lost.
+          filters: [new GraphqlDomainErrorFilter()],
           context: async ({
             req,
             res,
@@ -73,19 +80,32 @@ import { VerifyAccessTokenUseCase } from '../authorization/application/use-cases
             return ctx;
           },
           formatError: (formattedError) => {
-            // Re-use the stable error codes from GraphqlDomainErrorFilter.
-            // The filter sets `extensions.domainCode`; we promote it to
-            // `extensions.code` so GraphQL consumers can switch on
-            // `extensions.code` uniformly.
+            // The GraphqlDomainErrorFilter sets extensions.code to a
+            // GraphQL-shaped string (FORBIDDEN, UNAUTHENTICATED, etc.)
+            // AND extensions.domainCode to the raw DomainError code.
+            //
+            // We prefer the filter's classification if present; only
+            // fall back to the raw domainCode when the filter
+            // somehow didn't run (defensive — e.g. a thrown error
+            // that's not a DomainError).
             const extensions = formattedError.extensions as
-              { domainCode?: string } | undefined;
-            const code = extensions?.domainCode;
-            if (code) {
+              | {
+                  domainCode?: string;
+                  code?: string;
+                }
+              | undefined;
+            const filterCode = extensions?.code;
+            const domainCode = extensions?.domainCode;
+            if (filterCode) {
+              // Filter ran — leave extensions.code as-is.
+              return formattedError;
+            }
+            if (domainCode) {
               return {
                 ...formattedError,
                 extensions: {
                   ...formattedError.extensions,
-                  code,
+                  code: domainCode,
                 },
               };
             }

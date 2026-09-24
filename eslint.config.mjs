@@ -35,4 +35,18 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    // Integration tests using supertest get the response as `any`
+    // because supertest 7 doesn't ship its own type definitions for
+    // chainable Test methods. Loosening the unsafe-argument rule
+    // for test/ files avoids false-positive warnings on every
+    // `.send(...)` and `.expect(...)` call. Domain code keeps the
+    // strict setting.
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+    },
+  },
 );

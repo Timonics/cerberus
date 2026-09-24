@@ -105,8 +105,22 @@ export function uniqueEmail(prefix = 'e2e'): string {
 }
 
 export async function teardown(): Promise<void> {
-  if (_prisma) await _prisma.$disconnect();
-  if (_redis) await _redis.quit();
+  if (_prisma) {
+    try {
+      await _prisma.$disconnect();
+    } catch {
+      // ignore — connection may already be closed
+    }
+  }
+  if (_redis) {
+    try {
+      // ioredis 5 throws on quit() if the connection is already closed.
+      // disconnect() is gentler and never throws.
+      _redis.disconnect();
+    } catch {
+      // ignore
+    }
+  }
   _prisma = undefined;
   _redis = undefined;
 }

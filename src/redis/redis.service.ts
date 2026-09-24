@@ -51,7 +51,15 @@ export class RedisService implements OnModuleDestroy {
   }
 
   public async onModuleDestroy(): Promise<void> {
-    await this.client.quit();
+    // ioredis 5 throws if you call quit() on an already-closed
+    // connection (which happens in tests where Nest closes the
+    // app before our test teardown). disconnect() is idempotent —
+    // it never throws.
+    try {
+      await this.client.quit();
+    } catch {
+      this.client.disconnect();
+    }
     this.logger.log('Redis disconnected');
   }
 }
