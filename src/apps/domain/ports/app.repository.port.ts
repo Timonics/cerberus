@@ -1,4 +1,4 @@
-import { Tx } from '../../../shared/domain';
+import { Clock, Tx } from '../../../shared/domain';
 import { App } from '../aggregates/app';
 
 export abstract class AppRepository {
@@ -16,6 +16,14 @@ export abstract class AppRepository {
   ): Promise<App | null>;
 
   public abstract save(tx: Tx, app: App): Promise<App>;
+
+  /**
+   * V1.5: revoke a single AppApiKey row by id (sets `revokedAt = now`).
+   * Used by `RotateAppApiKeyUseCase` to invalidate the previous key
+   * when a new one is minted — the old key row stays in the DB for
+   * audit but can no longer be used to authenticate.
+   */
+  public abstract revokeKey(tx: Tx, keyId: string, clock: Clock): Promise<void>;
 }
 
 export const APP_REPOSITORY = Symbol('AppRepository');

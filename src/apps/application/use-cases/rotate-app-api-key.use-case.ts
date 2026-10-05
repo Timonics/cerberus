@@ -26,11 +26,15 @@ export interface RotateAppApiKeyResult {
 /**
  * Mint a new API key for an existing app.
  *
- * V1: the OLD key continues to work after rotation (we don't auto-revoke).
- * The caller is expected to deploy the new key and then call
- * `RevokeAppApiKeyUseCase` (V1.5) once the old key is decommissioned.
+ * V1.5: the OLD key is auto-revoked in the same transaction — the
+ * previous `AppApiKey` row gets `revokedAt = now` and can no longer
+ * be used to authenticate. The old row stays in the DB for audit
+ * but `findActiveByKeyHash` filters it out.
  *
- * V1.5: auto-revoke the previous key in the same transaction.
+ * Pre-V1.5 behavior was to keep both keys valid until the operator
+ * explicitly called `RevokeAppApiKeyUseCase`. That left a window
+ * where two valid keys existed for the same app — a real risk if
+ * the caller forgot to revoke the old one after deploying the new.
  */
 @Injectable()
 export class RotateAppApiKeyUseCase {
@@ -50,7 +54,10 @@ export class RotateAppApiKeyUseCase {
     const plaintextToken = generateAppApiKeyPlaintext();
     const keyHash = await this.hasher.hash(plaintextToken);
 
-    const app = await this.txRunner.run<App>(async (tx: Tx) => {
+    const { app, previousKeyId } = await this.txRunner.run<{
+      app: App;
+      previousKeyId: string | null;
+    }>(async (tx: Tx) => {
       const existing = await this.repo.findById(tx, appId);
       if (!existing) {
         throw new DomainError('app.not_found', 'App not found', { appId });
@@ -62,6 +69,11 @@ export class RotateAppApiKeyUseCase {
           { appId },
         );
       }
+      // Capture the previous key's id BEFORE rotateKey() drops the
+      // reference. Null when the app has never had a key (V1: should
+      // never happen because register always mints one).
+      const previousKeyId = existing.currentKey?.id ?? null;
+
       const newKey = AppApiKey.issue({
         id: this.idGenerator.generate(),
         appId: existing.id,
@@ -72,14 +84,23 @@ export class RotateAppApiKeyUseCase {
         ttlSeconds,
       });
       const updated = existing.rotateKey(newKey);
-      return this.repo.save(tx, updated);
+      const saved = await this.repo.save(tx, updated);
+
+      // V1.5: invalidate the previous key. The row stays for audit;
+      // `findActiveByKeyHash` filters out any key with `revokedAt`
+      // set.
+      if (previousKeyId !== null) {
+        await this.repo.revokeKey(tx, previousKeyId, this.clock);
+      }
+
+      return { app: saved, previousKeyId };
     });
 
     // Audit: apps.app.key_rotated.
     await this.recordAuditEventUc.execute({
       userId: null,
       eventType: 'apps.app.key_rotated',
-      payload: { appId: app.id },
+      payload: { appId: app.id, previousKeyId: previousKeyId ?? null },
     });
 
     return { app, plaintextApiKey: plaintextToken };

@@ -33,6 +33,7 @@ export const AUDIT_EVENT_TYPES = [
   'admin.api_key.revoked',
   'admin.user.mfa_disabled',
   'admin.audit.searched',
+  'admin.organization.created',
   // Apps (V1.5+)
   'apps.app.registered',
   'apps.app.key_rotated',

@@ -3,11 +3,15 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { RequestMethod } from '@nestjs/common';
+import { json, urlencoded } from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import type { Server as HttpServer } from 'node:http';
 import { apiReference } from '@scalar/nestjs-api-reference';
+import { ConfigService } from '@nestjs/config';
 import { AppModule } from '../app.module';
 import { GraphqlDomainErrorFilter } from '../graphql/graphql-domain-error.filter';
 import { readArtifact } from '../common/artifact-loader';
+import { AppConfig } from '../config/configuration';
 
 /**
  * Bootstrap the public-facing NestApplication.
@@ -25,6 +29,35 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
   });
   app.useLogger(app.get(PinoLogger));
   app.flushLogs();
+
+  // V1.5: HTTP hardening. The defaults (100 KiB body, 30s timeouts)
+  // are read from config so operators can tune per-environment.
+  const httpCfg = app.get(ConfigService).getOrThrow<AppConfig['http']>('http');
+  // Reject oversized request bodies BEFORE the JSON parser spends
+  // memory allocating them. Express 5's body-parser returns 413
+  // automatically when the limit is exceeded.
+  app.use(json({ limit: httpCfg.bodyLimitBytes }));
+  app.use(urlencoded({ limit: httpCfg.bodyLimitBytes, extended: true }));
+  // Hard timeouts on the request and response phases. Without
+  // these, a malicious client can hold a connection open
+  // indefinitely, exhausting the server's connection pool.
+  const server = app.getHttpServer() as HttpServer;
+  if (server && typeof server.setTimeout === 'function') {
+    server.setTimeout(httpCfg.requestTimeoutMs);
+  }
+  // Express also exposes a per-request response timeout via
+  // res.setTimeout(). We apply it as a default for every request
+  // by attaching it to the response object inside a tiny middleware.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setTimeout(httpCfg.responseTimeoutMs, () => {
+      if (!res.headersSent) {
+        res.status(503).end('Request timed out');
+      } else {
+        res.destroy();
+      }
+    });
+    next();
+  });
 
   // helmet applies strict defaults (CSP, X-Frame-Options, etc.) that
   // block Scalar's inline scripts and CDN-fetched assets at /api-docs.

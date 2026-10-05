@@ -21,6 +21,11 @@ export type DomainErrorCode =
   | 'identity.mfa.not_enabled'
   | 'identity.mfa.code_invalid'
   | 'identity.mfa.recovery_code_invalid'
+  | 'identity.organization.name_required'
+  | 'identity.organization.name_too_long'
+  | 'identity.organization.description_too_long'
+  | 'identity.organization.slug_taken'
+  | 'identity.organization.not_found'
   // Authentication
   | 'authentication.invalid_credentials'
   | 'authentication.account_locked'

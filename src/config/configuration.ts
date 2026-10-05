@@ -86,6 +86,31 @@ export interface AppConfig {
     max: number;
   };
 
+  /**
+   * V1.5 HTTP hardening: explicit limits for body size and request
+   * timeout. Without these, a malicious client can POST arbitrary
+   * payloads or hold a connection open indefinitely.
+   */
+  http: {
+    /**
+     * Max accepted JSON body size, as a raw byte count.
+     * Default: 100 KiB. The largest legitimate request is the JWKS
+     * payload (a few KB); 100 KiB is comfortable headroom.
+     */
+    bodyLimitBytes: number;
+    /**
+     * Hard timeout for receiving the request headers + body. If a
+     * client can't send the full request in this time, the
+     * connection is closed.
+     */
+    requestTimeoutMs: number;
+    /**
+     * Hard timeout for sending the response. If a handler takes
+     * longer than this, the response is closed.
+     */
+    responseTimeoutMs: number;
+  };
+
   graphql: {
     /** Enable GraphQL introspection (SDL schema). */
     introspectionEnabled: boolean;
@@ -169,6 +194,16 @@ export const configuration = (): AppConfig => {
     rateLimit: {
       ttl: Number(process.env.RATE_LIMIT_TTL ?? 60),
       max: Number(process.env.RATE_LIMIT_MAX ?? 60),
+    },
+
+    http: {
+      bodyLimitBytes: Number(process.env.HTTP_BODY_LIMIT_BYTES ?? 102_400), // 100 KiB
+      // 30s request timeout — generous for slow clients but not
+      // long enough for an attacker to keep a connection open.
+      requestTimeoutMs: Number(process.env.HTTP_REQUEST_TIMEOUT_MS ?? 30_000),
+      // 30s response timeout — handlers that take longer than this
+      // are pathological and should fail loud, not hang.
+      responseTimeoutMs: Number(process.env.HTTP_RESPONSE_TIMEOUT_MS ?? 30_000),
     },
 
     graphql: {

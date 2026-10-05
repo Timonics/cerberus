@@ -2,10 +2,14 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
+import { json, urlencoded } from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import type { Server as HttpServer } from 'node:http';
 import { apiReference } from '@scalar/nestjs-api-reference';
+import { ConfigService } from '@nestjs/config';
 import { AdminModule } from '../administration/administration.module';
 import { readArtifact } from '../common/artifact-loader';
+import { AppConfig } from '../config/configuration';
 
 /**
  * Bootstrap the admin-facing NestApplication.
@@ -32,6 +36,27 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
   });
   app.useLogger(app.get(PinoLogger));
   app.flushLogs();
+
+  // V1.5: HTTP hardening (mirrors public-app.ts). The admin
+  // surface is IP-allowlisted at the route layer so the body
+  // limit + timeouts are belt-and-suspenders.
+  const httpCfg = app.get(ConfigService).getOrThrow<AppConfig['http']>('http');
+  app.use(json({ limit: httpCfg.bodyLimitBytes }));
+  app.use(urlencoded({ limit: httpCfg.bodyLimitBytes, extended: true }));
+  const server = app.getHttpServer() as HttpServer;
+  if (server && typeof server.setTimeout === 'function') {
+    server.setTimeout(httpCfg.requestTimeoutMs);
+  }
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setTimeout(httpCfg.responseTimeoutMs, () => {
+      if (!res.headersSent) {
+        res.status(503).end('Request timed out');
+      } else {
+        res.destroy();
+      }
+    });
+    next();
+  });
 
   // Skip helmet on /admin/docs (Scalar UI), same as the public app.
   // helmet's strict CSP blocks Scalar's inline scripts and CDN assets.

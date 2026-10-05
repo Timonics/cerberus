@@ -81,6 +81,27 @@ export const envValidationSchema = Joi.object({
   RATE_LIMIT_TTL: Joi.number().integer().positive().default(60),
   RATE_LIMIT_MAX: Joi.number().integer().positive().default(60),
 
+  // V1.5: HTTP hardening — body size + request/response timeouts.
+  // Defaults match the values in src/config/configuration.ts; the
+  // Joi schemas here just enforce the right type + range.
+  HTTP_BODY_LIMIT_BYTES: Joi.number()
+    .integer()
+    .min(1024) // 1 KiB absolute floor — anything lower is unusable
+    .max(10 * 1024 * 1024) // 10 MiB ceiling — anything higher is unbounded
+    .default(102_400), // 100 KiB
+  HTTP_REQUEST_TIMEOUT_MS: Joi.number()
+    .integer()
+    .positive()
+    .min(1000) // 1s floor
+    .max(5 * 60 * 1000) // 5min ceiling
+    .default(30_000), // 30s
+  HTTP_RESPONSE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .positive()
+    .min(1000)
+    .max(10 * 60 * 1000) // 10min ceiling
+    .default(30_000), // 30s
+
   GRAPHQL_INTROSPECTION: Joi.boolean().default(true),
   GRAPHQL_PLAYGROUND: Joi.boolean().default(true),
 });

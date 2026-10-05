@@ -14,6 +14,7 @@ import { DisableMfaUseCase } from './application/use-cases/disable-mfa.use-case'
 import { EnableMfaUseCase } from './application/use-cases/enable-mfa.use-case';
 import { GetUserUseCase } from './application/use-cases/get-user.use-case';
 import { RegisterUserUseCase } from './application/use-cases/register-user.use-case';
+import { CreateOrganizationUseCase } from './application/use-cases/create-organization.use-case';
 import { UpdateDisplayNameUseCase } from './application/use-cases/update-display-name.use-case';
 import { VerifySecondFactorUseCase } from './application/use-cases/verify-second-factor.use-case';
 import { IdentityController } from './interfaces/http/identity.controller';
@@ -84,6 +85,7 @@ import { AppsModule } from '../apps/apps.module';
 
     // Use-cases
     RegisterUserUseCase,
+    CreateOrganizationUseCase,
     ChangePasswordUseCase,
     EnableMfaUseCase,
     ConfirmMfaEnrollmentUseCase,
@@ -97,6 +99,7 @@ import { AppsModule } from '../apps/apps.module';
   ],
   exports: [
     RegisterUserUseCase,
+    CreateOrganizationUseCase,
     ChangePasswordUseCase,
     EnableMfaUseCase,
     ConfirmMfaEnrollmentUseCase,

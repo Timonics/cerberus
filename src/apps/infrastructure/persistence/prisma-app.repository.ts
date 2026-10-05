@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { Tx } from '../../../shared/domain/persistence/tx';
+import { Clock, Tx } from '../../../shared/domain';
 import { App } from '../../domain/aggregates/app';
 import { AppApiKey } from '../../domain/aggregates/app-api-key';
 import {
@@ -187,6 +187,14 @@ export class PrismaAppRepository extends AppRepository {
       lastUsedAt: row.lastUsedAt,
       expiresAt: row.expiresAt,
       revokedAt: row.revokedAt,
+    });
+  }
+
+  public async revokeKey(tx: Tx, keyId: string, clock: Clock): Promise<void> {
+    const client = tx as PrismaTx;
+    await client.appApiKey.update({
+      where: { id: keyId },
+      data: { revokedAt: clock.now() },
     });
   }
 }

@@ -73,6 +73,9 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'engagement.email_verification.already_consumed':
       case 'engagement.password_reset.invalid_token':
       case 'engagement.password_reset.expired':
+      case 'identity.organization.name_required':
+      case 'identity.organization.name_too_long':
+      case 'identity.organization.description_too_long':
         return HttpStatus.BAD_REQUEST;
 
       // 401 — unauthenticated / bad credentials
@@ -124,6 +127,7 @@ export class DomainErrorFilter implements ExceptionFilter {
       // 409 — conflict
       case 'identity.email.taken':
       case 'identity.credential.locked':
+      case 'identity.organization.slug_taken':
       case 'identity.mfa.already_enabled':
       case 'domain.invariant_violation':
       case 'domain.illegal_state':

@@ -441,22 +441,32 @@ filter (V1 rejects unbounded queries).
 
 Tracked in code as `// V1.5 will add` comments. Highlights:
 
-- **`POST /admin/orgs`** — currently no way to create an empty org via the API;
-  operators seed via direct DB insert.
-- **Auto-revoke old key on rotation** — `PATCH /v1/apps/{id}/rotate-key` mints
-  a new key but keeps the old one alive until `DELETE /v1/apps/{id}`.
 - **Per-email rate limiting** — login-attempt counters are global, not per-email.
 - **Outbox pattern for events** — currently events fire in-memory; a process
   crash between commit and publish drops them.
-- **Mail-sender subscriber for engagement events** — actually wired now (V1.5
-  fix #2), but `EMAIL_TRANSPORT=sendgrid` hasn't been live-tested.
+- **Mail-sender subscriber for engagement events** — wired now and
+  verified live (Mailpit receives both `engagement.email_verification.requested`
+  and `engagement.password_reset.requested` events). `EMAIL_TRANSPORT=sendgrid`
+  is configured but hasn't been live-tested against the real SendGrid API.
 - **Replace `X-User-Id` placeholder auth** — done in V1.5 (JwtAuthGuard +
-  @CurrentUser). The `Authorization: Bearer <accessToken>` header is required
+  @CurrentUser). The `Authorization: Bearer *** header is required
   for all authenticated endpoints.
 - **Audit log search by time range** — `from`/`to` filters are accepted but
   ignored at the SQL level.
-- **Tests** — `test/` is empty. The CI workflow has a placeholder `test` job
-  that exits 0. Drop `npm test` once the suite lands.
+- **HTTP hardening** — body limit (100 KiB) + 30s request/response
+  timeouts configurable via `HTTP_BODY_LIMIT_BYTES`,
+  `HTTP_REQUEST_TIMEOUT_MS`, `HTTP_RESPONSE_TIMEOUT_MS`.
+- **`POST /admin/orgs`** — done in V1.5. Operators can pre-create empty
+  orgs (`POST /admin/orgs` with `{slug, name, description?}`).
+- **Auto-revoke old key on rotation** — done in V1.5. The previous
+  `AppApiKey` row is marked `revokedAt = now()` in the same tx as
+  the rotation; the new key is the only one that authenticates.
+- **Audit log coverage** — done. 23 event types defined in
+  `AUDIT_EVENT_TYPES`, all 23 now actually written. Missing ones
+  (account lockout, email verified, all 4 engagement events, both
+  token events, admin audit searched, admin organization created)
+  wired through either in-use-case calls or the
+  `EngagementAuditLogHandler` cross-context subscriber.
 
 ## Contributing
 

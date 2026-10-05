@@ -12,7 +12,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { AdminDisableUserMfaDto, IssueAdminApiKeyDto } from './dto/admin.dto';
+import {
+  AdminDisableUserMfaDto,
+  CreateOrganizationDto,
+  IssueAdminApiKeyDto,
+} from './dto/admin.dto';
 import { IssueAdminApiKeyUseCase } from '../../application/use-cases/issue-admin-api-key.use-case';
 import { RevokeAdminApiKeyUseCase } from '../../application/use-cases/revoke-admin-api-key.use-case';
 import { AdminDisableUserMfaUseCase } from '../../application/use-cases/admin-disable-user-mfa.use-case';
@@ -20,6 +24,7 @@ import { AdminSearchAuditLogUseCase } from '../../application/use-cases/admin-se
 import { AdminApiKeyGuard } from '../security/admin-api-key.guard';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { GetUserUseCase } from '../../../identity/application/use-cases/get-user.use-case';
+import { CreateOrganizationUseCase } from '../../../identity/application/use-cases/create-organization.use-case';
 
 interface AdminRequest extends Request {
   adminKey: { adminKeyId: string; role: 'ADMIN' | 'SUPER_ADMIN' };
@@ -38,6 +43,7 @@ export class AdminController {
     private readonly adminDisableMfaUc: AdminDisableUserMfaUseCase,
     private readonly adminSearchAuditLogUc: AdminSearchAuditLogUseCase,
     private readonly getUserUc: GetUserUseCase,
+    private readonly createOrganizationUc: CreateOrganizationUseCase,
   ) {}
 
   @Post('api-keys')
@@ -132,6 +138,33 @@ export class AdminController {
         createdAt: e.createdAt.toISOString(),
       })),
       total: result.total,
+    };
+  }
+
+  /**
+   * Create an empty organization.
+   *
+   * V1.5: lets operators pre-create tenant orgs so users can
+   * register with `?organizationSlug=<the-pre-created-slug>` and
+   * auto-join. The new org has no members; the first user to
+   * register with the matching slug gets OWNER role.
+   */
+  @Post('orgs')
+  @HttpCode(HttpStatus.CREATED)
+  public async createOrganization(
+    @Body() body: CreateOrganizationDto,
+    @Req() req: Request,
+  ) {
+    const result = await this.createOrganizationUc.execute({
+      slug: body.slug,
+      name: body.name,
+      description: body.description ?? null,
+      callerKeyId: getAdminKeyId(req),
+    });
+    return {
+      id: result.organization.id.value,
+      slug: result.organization.slug.value,
+      name: result.organization.name,
     };
   }
 }
