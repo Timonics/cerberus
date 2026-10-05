@@ -22,6 +22,7 @@ import {
   EmailVerificationRepository,
 } from '../../domain/ports/email-verification.repository.port';
 import { Sha256TokenService } from '../../infrastructure/security/sha256-token.service';
+import { RecordAuditEventUseCase } from './record-audit-event.use-case';
 
 export interface ConfirmEmailVerificationInput {
   token: string;
@@ -53,6 +54,7 @@ export class ConfirmEmailVerificationUseCase {
     private readonly verifRepo: EmailVerificationRepository,
     @Inject(USER_REPOSITORY) private readonly userRepo: UserRepository,
     private readonly tokenService: Sha256TokenService,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(input: ConfirmEmailVerificationInput): Promise<void> {
@@ -61,6 +63,7 @@ export class ConfirmEmailVerificationUseCase {
     const result = await this.txRunner.run<{
       user: User;
       verification: EmailVerification;
+      wasAlreadyVerified: boolean;
     } | null>(async (tx: Tx) => {
       const verification = await this.verifRepo.findByTokenHash(tx, tokenHash);
       if (!verification || !verification.isAliveAt(this.clock.now())) {
@@ -70,11 +73,12 @@ export class ConfirmEmailVerificationUseCase {
       if (!user) {
         return null;
       }
+      const wasAlreadyVerified = user.emailVerifiedAt !== null;
       const consumed = verification.consume(this.clock, this.idGenerator);
       const savedVerif = await this.verifRepo.save(tx, consumed);
       const verifiedUser = user.markEmailVerified(this.clock);
       const savedUser = await this.userRepo.save(tx, verifiedUser);
-      return { user: savedUser, verification: savedVerif };
+      return { user: savedUser, verification: savedVerif, wasAlreadyVerified };
     });
 
     if (!result) {
@@ -85,5 +89,19 @@ export class ConfirmEmailVerificationUseCase {
     }
 
     await this.eventBus.publishAll(result.verification.pullDomainEvents());
+
+    // V1.5 audit: write `identity.email.verified` only on the
+    // null→set transition. `User.markEmailVerified` is idempotent —
+    // re-presenting a valid token after the email is already
+    // verified should NOT double-fire the audit event.
+    if (!result.wasAlreadyVerified) {
+      await this.recordAuditEventUc.execute({
+        userId: result.user.id.value,
+        eventType: 'identity.email.verified',
+        payload: {
+          verificationId: result.verification.id,
+        },
+      });
+    }
   }
 }

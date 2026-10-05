@@ -235,6 +235,30 @@ export class LoginUseCase {
         await this.txRunner.run(async (tx: Tx) => {
           await this.credentialRepo.save(tx, updatedCred);
         });
+        // Audit: V1.5 fix — write BOTH the auth-layer event (records
+        // the lockout action) and the identity-layer event (records
+        // that the user's account is now in a locked state). Two
+        // event types in AUDIT_EVENT_TYPES map to two distinct
+        // downstream consumers: the auth event feeds anomaly
+        // detection; the identity event feeds user-account history.
+        await this.recordAuditEventUc.execute({
+          userId: user.id.value,
+          eventType: 'authentication.account.locked',
+          payload: {
+            reason: 'lockout_tier_triggered',
+            lockedUntil: until.toISOString(),
+            ipAddress: ip.value,
+          },
+          ipAddress: ip.value,
+        });
+        await this.recordAuditEventUc.execute({
+          userId: user.id.value,
+          eventType: 'identity.account.locked',
+          payload: {
+            reason: 'lockout_tier_triggered',
+            lockedUntil: until.toISOString(),
+          },
+        });
         throw new DomainError(
           'authentication.account_locked',
           'Account temporarily locked due to repeated failed login attempts',

@@ -17,6 +17,7 @@ import {
   SESSION_REPOSITORY,
   SessionRepository,
 } from '../../../authentication/domain/ports/session.repository.port';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
 export interface RevokeTokenInput {
   token: string;
@@ -47,6 +48,7 @@ export class RevokeTokenUseCase {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
     @Inject(SESSION_REPOSITORY) private readonly sessionRepo: SessionRepository,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(input: RevokeTokenInput): Promise<void> {
@@ -54,6 +56,16 @@ export class RevokeTokenUseCase {
 
     if (hint === 'access_token') {
       // Cannot revoke JWTs. Per RFC 7009, return success without action.
+      // V1.5 audit: still record `authorization.token.revoked` with
+      // reason=no_op so operators can see when the endpoint was hit.
+      await this.recordAuditEventUc.execute({
+        userId: null,
+        eventType: 'authorization.token.revoked',
+        payload: {
+          tokenTypeHint: 'access_token',
+          reason: 'no_op_unsupported',
+        },
+      });
       return;
     }
 
@@ -90,6 +102,20 @@ export class RevokeTokenUseCase {
         'ADMIN_REVOKED',
       ),
     ]);
+
+    // V1.5 audit: RFC-7009-shaped event for the operator. Sits
+    // alongside `authentication.session.revoked` (which records the
+    // session-state transition) — the authz-shaped event is what
+    // external token consumers (resource servers) will look for.
+    await this.recordAuditEventUc.execute({
+      userId: session.userId.value,
+      eventType: 'authorization.token.revoked',
+      payload: {
+        tokenTypeHint: 'refresh_token',
+        sessionId: session.id,
+        reason: 'admin_revoked',
+      },
+    });
   }
 }
 

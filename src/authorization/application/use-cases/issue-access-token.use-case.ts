@@ -29,6 +29,7 @@ import {
   MembershipRepository,
 } from '../../../identity/domain/ports/membership.repository.port';
 import { AppConfig } from '../../../config/configuration';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
 export interface IssueAccessTokenInput {
   userId: string;
@@ -79,6 +80,7 @@ export class IssueAccessTokenUseCase {
     private readonly organizationRepo: OrganizationRepository,
     private readonly jwtSigner: JwtSignerService,
     private readonly configService: ConfigService,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {
     // Silence unused-import for Clock — kept for future use (token
     // timestamps) and to match the parameter shape of other use-cases.
@@ -153,6 +155,20 @@ export class IssueAccessTokenUseCase {
         ttlSeconds,
       });
       return { token, scopes };
+    });
+
+    // V1.5 audit: write `authorization.token.minted` so security
+    // teams can see who got a token, with what scopes, and from
+    // which org. (If the mint throws, no row is written — we
+    // deliberately only audit successful mints.)
+    await this.recordAuditEventUc.execute({
+      userId: input.userId,
+      eventType: 'authorization.token.minted',
+      payload: {
+        scopes: scopes.map((s) => s.value),
+        organizationSlug: input.organizationSlug ?? null,
+        ttlSeconds,
+      },
     });
 
     return {

@@ -11,6 +11,7 @@ import { RequestEmailVerificationUseCase } from './application/use-cases/request
 import { RequestPasswordResetUseCase } from './application/use-cases/request-password-reset.use-case';
 import { UserRegisteredVerificationRequester } from './application/event-handlers/user-registered.handler';
 import { MailSenderDispatcher } from './application/event-handlers/mail-sender.dispatcher';
+import { EngagementAuditLogHandler } from './application/event-handlers/engagement-audit-log.handler';
 import { AUDIT_LOG_REPOSITORY } from './domain/ports/audit-log.repository.port';
 import { EMAIL_VERIFICATION_REPOSITORY } from './domain/ports/email-verification.repository.port';
 import { MAIL_SENDER } from './domain/ports/mail-sender.port';
@@ -104,6 +105,7 @@ import { EngagementResolver } from './interfaces/graphql/engagement.resolver';
     // Cross-context event handler
     UserRegisteredVerificationRequester,
     MailSenderDispatcher,
+    EngagementAuditLogHandler,
 
     // GraphQL resolver
     EngagementResolver,

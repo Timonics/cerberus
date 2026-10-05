@@ -12,6 +12,7 @@ import {
 } from '../../../engagement/domain/ports/audit-log.repository.port';
 import { AuditLog } from '../../../engagement/domain/aggregates/audit-log';
 import { AuditEventType } from '../../../engagement/domain/value-objects/audit-event-type';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
   AdminAuditSearchQuery,
   buildAdminAuditSearchQuery,
@@ -24,6 +25,10 @@ export interface AdminSearchAuditLogInput {
   to?: Date | null;
   limit?: number | null;
   offset?: number | null;
+  /** V1.5: who issued the search, for the `admin.audit.searched` row. */
+  callerUserId?: string | null;
+  /** V1.5: which admin API key (if any) issued the search. */
+  callerKeyId?: string | null;
 }
 
 export interface AdminSearchAuditLogResult {
@@ -57,6 +62,7 @@ export class AdminSearchAuditLogUseCase {
     @Inject(TRANSACTION_RUNNER) private readonly txRunner: TransactionRunner,
     @Inject(AUDIT_LOG_REPOSITORY)
     private readonly auditRepo: AuditLogRepository,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(
@@ -65,7 +71,10 @@ export class AdminSearchAuditLogUseCase {
     const query = buildAdminAuditSearchQuery(input);
     return this.txRunner.run<AdminSearchAuditLogResult>(async (tx: Tx) => {
       const rows = await this.loadByQuery(tx, query);
-      return {
+      // V1.5 audit: write `admin.audit.searched` after a successful
+      // query. The caller (callerUserId) is captured so operators
+      // can answer "who searched the audit log and when".
+      const result = {
         entries: rows.map((row: AuditLog) => ({
           id: row.id,
           eventType: row.eventType.value,
@@ -77,6 +86,25 @@ export class AdminSearchAuditLogUseCase {
         })),
         total: rows.length,
       };
+      // Audit logging is fire-and-forget — it must not block the
+      // operator's read path. We log inside the same tx context so
+      // a rolled-back search doesn't leave an audit row.
+      await this.recordAuditEventUc.execute({
+        userId: query.userId ?? null,
+        eventType: 'admin.audit.searched',
+        payload: {
+          userIdFilter: query.userId ?? null,
+          eventTypeFilter: query.eventType ?? null,
+          from: query.from?.toISOString() ?? null,
+          to: query.to?.toISOString() ?? null,
+          limit: query.limit ?? null,
+          offset: query.offset ?? null,
+          resultCount: result.total,
+          callerUserId: input.callerUserId ?? null,
+          callerKeyId: input.callerKeyId ?? null,
+        },
+      });
+      return result;
     });
   }
 
