@@ -12,9 +12,7 @@ import { IssueAdminApiKeyUseCase } from '../src/administration/application/use-c
 import { RevokeAdminApiKeyUseCase } from '../src/administration/application/use-cases/revoke-admin-api-key.use-case';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PublicTestModule } from './public-test.module';
-import {
-  teardown,
-} from './harness';
+import { teardown } from './harness';
 
 describe('Admin API key lifecycle (integration)', () => {
   let module: TestingModule;

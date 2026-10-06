@@ -27,11 +27,7 @@ import { ConfirmEmailVerificationUseCase } from '../src/engagement/application/u
 import { RequestPasswordResetUseCase } from '../src/engagement/application/use-cases/request-password-reset.use-case';
 import { ConfirmPasswordResetUseCase } from '../src/engagement/application/use-cases/confirm-password-reset.use-case';
 import { PrismaClient } from '@prisma/client';
-import {
-  buildIntegrationContext,
-  teardown,
-  uniqueEmail,
-} from './harness';
+import { buildIntegrationContext, teardown, uniqueEmail } from './harness';
 
 describe('Engagement confirm flow (integration)', () => {
   let ctx: Awaited<ReturnType<typeof buildIntegrationContext>>;
