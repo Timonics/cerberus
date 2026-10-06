@@ -112,14 +112,16 @@ export class AdminSearchAuditLogUseCase {
     tx: Tx,
     query: AdminAuditSearchQuery,
   ): Promise<ReadonlyArray<AuditLog>> {
-    // V1: only the userId path is implemented. Other filters are
-    // accepted (and validated) so the public contract is stable, but
-    // they're currently best-effort.
+    // V1.5: time-range filters actually narrow the result set
+    // (previously the use-case validated from/to but the repo
+    // ignored them — every search returned unfiltered rows).
+    const range = { from: query.from ?? null, to: query.to ?? null };
     if (query.userId) {
       return this.auditRepo.findByUserId(
         tx,
         UserId.create(query.userId),
         query.limit ?? 100,
+        range,
       );
     }
     if (query.eventType) {
@@ -127,6 +129,7 @@ export class AdminSearchAuditLogUseCase {
         tx,
         AuditEventType.create(query.eventType),
         query.limit ?? 100,
+        range,
       );
     }
     // No userId + no eventType — `buildAdminAuditSearchQuery` already

@@ -16,6 +16,7 @@ import {
   AppRepository,
 } from '../../domain/ports/app.repository.port';
 import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
+
 export interface RegisterAppInput {
   name: string;
   description?: string;

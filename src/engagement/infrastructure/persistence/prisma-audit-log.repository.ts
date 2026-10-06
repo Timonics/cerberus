@@ -8,6 +8,7 @@ import { AuditEventType } from '../../domain/value-objects/audit-event-type';
 import {
   AUDIT_LOG_REPOSITORY,
   AuditLogRepository,
+  AuditLogTimeRange,
 } from '../../domain/ports/audit-log.repository.port';
 
 type PrismaTx = Prisma.TransactionClient | PrismaClient;
@@ -46,10 +47,14 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
     tx: Tx,
     userId: UserId,
     limit: number,
+    range?: AuditLogTimeRange,
   ): Promise<ReadonlyArray<AuditLog>> {
     const client = tx as PrismaTx;
     const rows = await client.auditLog.findMany({
-      where: { userId: userId.value },
+      where: {
+        userId: userId.value,
+        ...buildTimeRange(range),
+      },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
@@ -70,10 +75,14 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
     tx: Tx,
     eventType: AuditEventType,
     limit: number,
+    range?: AuditLogTimeRange,
   ): Promise<ReadonlyArray<AuditLog>> {
     const client = tx as PrismaTx;
     const rows = await client.auditLog.findMany({
-      where: { eventType: eventType.value },
+      where: {
+        eventType: eventType.value,
+        ...buildTimeRange(range),
+      },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
@@ -89,6 +98,27 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
       }),
     );
   }
+}
+
+/**
+ * Build the `createdAt` clause for a time-range filter.
+ * Returns `undefined` when no range is supplied so Prisma treats
+ * it as "no constraint". V1.5: this is the actual SQL filter —
+ * previously the use-case validated these inputs but the
+ * repository ignored them, so every search ran unfiltered.
+ */
+function buildTimeRange(range: AuditLogTimeRange | undefined): {
+  createdAt?: { gte?: Date; lte?: Date };
+} {
+  if (!range) return {};
+  const clause: { gte?: Date; lte?: Date } = {};
+  if (range.from !== undefined && range.from !== null) {
+    clause.gte = range.from;
+  }
+  if (range.to !== undefined && range.to !== null) {
+    clause.lte = range.to;
+  }
+  return Object.keys(clause).length === 0 ? {} : { createdAt: clause };
 }
 
 void AUDIT_LOG_REPOSITORY;
