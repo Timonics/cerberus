@@ -282,5 +282,12 @@ jobs:
         run: npx prisma migrate deploy
       - name: 'Run unit tests'
         run: npm test
+      - name: 'Check coverage threshold'
+        # V1.5: gate PRs on coverage not dropping below the baseline
+        # captured in `jest.coverageThreshold` in package.json. The
+        # baseline is currently low (~9%) because the audit +
+        # integration tests live in test/, not src/, but it MUST
+        # never regress. Real coverage comes from npm run test:e2e.
+        run: npm run test:cov
       - name: 'Run integration tests'
         run: npm run test:e2e
