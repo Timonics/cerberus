@@ -486,3 +486,53 @@ model AppApiKey {
   @@index([revokedAt])
   @@map("app_api_keys")
 }
+
+/// V1.5: Outbox pattern. Domain events get INSERTed into this table
+/// inside the same DB transaction as the aggregate change. A relay
+/// process polls for unprocessed rows and publishes them through
+/// the in-process EventBus. This closes the failure window where
+/// a process crash between commit and in-memory publish would drop
+/// the event (and the user would never get the email).
+///
+/// Lifecycle:
+///   1. Use-case writes the aggregate row(s).
+///   2. Use-case writes the Outbox row(s) in the same tx.
+///   3. Use-case commits.
+///   4. Relay (`OutboxRelay`) sees the unprocessed row, publishes
+///      through EventBus, marks processedAt = now().
+///   5. Subscribers (MailSenderDispatcher, EngagementAuditLogHandler)
+///      consume the event in-process.
+///
+/// Failure modes covered:
+///   - Crash before relay runs: row stays unprocessed, picked up
+///     on next poll.
+///   - Crash after publish, before mark: row gets re-published.
+///     Subscribers must be idempotent (mail-sender, audit-log
+///     already are — see their spec for "audit failures are caught").
+model OutboxEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// Dotted event name, e.g. "engagement.email_verification.requested".
+  /// Same convention as the DomainEvent.eventName getter.
+  eventName   String   @db.VarChar(120)
+  /// The aggregate this event belongs to. Optional — used for
+  /// debugging only. (e.g. "EmailVerification" / "User")
+  aggregateType String? @db.VarChar(80)
+  aggregateId String?  @db.Uuid
+  /// Full event payload, JSON-serialized. The relay rehydrates this
+  /// into the original DomainEvent class before publishing.
+  payload     Json
+  /// When the row was written (= the time the originating tx committed).
+  createdAt   DateTime @default(now())
+  /// When the relay successfully published the event. NULL = pending.
+  /// Indexed for the relay's poll query.
+  processedAt DateTime?
+  /// How many times the relay tried to publish. Used for backoff +
+  /// dead-letter detection. After N attempts the row is flagged.
+  attempts    Int      @default(0)
+  /// Last error message, for ops debugging. NULL until first failure.
+  lastError   String?  @db.VarChar(500)
+
+  @@index([processedAt, createdAt])
+  @@index([eventName])
+  @@map("outbox_events")
+}

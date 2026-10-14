@@ -7,6 +7,8 @@ import {
   EventBus,
   ID_GENERATOR,
   IdGenerator,
+  OUTBOX,
+  Outbox,
   TRANSACTION_RUNNER,
   TransactionRunner,
   Tx,
@@ -121,6 +123,7 @@ export class RegisterUserUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
+    @Inject(OUTBOX) private readonly outbox: Outbox,
     @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasher,
     @Inject(USER_REPOSITORY) private readonly userRepo: UserRepository,
     @Inject(CREDENTIAL_REPOSITORY)
@@ -209,11 +212,18 @@ export class RegisterUserUseCase {
       });
       await this.membershipRepo.save(tx, membership);
 
+      // V1.5 outbox: drain the user's domain events and persist them
+      // to the outbox in the same transaction. The OutboxRelay will
+      // re-publish them through the in-process bus after commit.
+      // Crashing between commit and relay now leaves the events
+      // durably stored rather than lost.
+      await this.outbox.appendAll(tx, user.pullDomainEvents());
+
       return { user, organization, autoCreatedOrg };
     });
 
-    // Publish post-commit events. Drains all pending domain events.
-    await this.eventBus.publishAll(user.pullDomainEvents());
+    // (Events were already persisted to the outbox inside the tx; no
+    // post-commit publish needed.)
 
     // Audit-log: identity.user.registered.
     // V1.5 fix: the audit_log table was empty in V1 because no BC was

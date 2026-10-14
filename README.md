@@ -442,8 +442,13 @@ filter (V1 rejects unbounded queries).
 Tracked in code as `// V1.5 will add` comments. Highlights:
 
 - **Per-email rate limiting** — login-attempt counters are global, not per-email.
-- **Outbox pattern for events** — currently events fire in-memory; a process
-  crash between commit and publish drops them.
+- **Outbox pattern for events** — implemented and live. Use-cases persist
+  events to `outbox_events` inside the same transaction; `OutboxRelay`
+  polls every 1s and re-publishes through the in-process `EventBus`.
+  Crashing between commit and the relay tick now leaves the event
+  durably stored rather than dropped. Subscribers (`MailSenderDispatcher`,
+  `EngagementAuditLogHandler`) are idempotent so the relay is safe
+  to re-publish after a crash. See `src/shared/infrastructure/events/`.
 - **Mail-sender subscriber for engagement events** — wired now and
   verified live (Mailpit receives both `engagement.email_verification.requested`
   and `engagement.password_reset.requested` events). `EMAIL_TRANSPORT=sendgrid`
@@ -451,8 +456,10 @@ Tracked in code as `// V1.5 will add` comments. Highlights:
 - **Replace `X-User-Id` placeholder auth** — done in V1.5 (JwtAuthGuard +
   @CurrentUser). The `Authorization: Bearer *** header is required
   for all authenticated endpoints.
-- **Audit log search by time range** — `from`/`to` filters are accepted but
-  ignored at the SQL level.
+- **Cron cleanup of expired rows** — `email_verifications`,
+  `password_resets`, expired `mfa_secrets`, and `sessions` are not
+  reaped automatically. The tables grow forever until a V1.5
+  cron job lands.
 - **HTTP hardening** — body limit (100 KiB) + 30s request/response
   timeouts configurable via `HTTP_BODY_LIMIT_BYTES`,
   `HTTP_REQUEST_TIMEOUT_MS`, `HTTP_RESPONSE_TIMEOUT_MS`.

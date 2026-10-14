@@ -12,6 +12,8 @@ import {
   TRANSACTION_RUNNER,
   TransactionRunner,
   Tx,
+  OUTBOX,
+  Outbox,
 } from '../../../shared/domain';
 import { Email } from '../../../shared/domain/value-objects/email';
 import { Credential } from '../../../identity/domain/aggregates/credential';
@@ -122,6 +124,7 @@ export class LoginUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
+    @Inject(OUTBOX) private readonly outbox: Outbox,
     @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasher,
     @Inject(SESSION_REPOSITORY) private readonly sessionRepo: SessionRepository,
     @Inject(LOGIN_ATTEMPT_REPOSITORY)
@@ -325,21 +328,21 @@ export class LoginUseCase {
         const unlockedCred = credential.unlock(this.clock);
         await this.credentialRepo.save(tx, unlockedCred);
         const persisted = await this.sessionRepo.save(tx, session);
+        // V1.5 outbox: append the event inside the same tx so the
+        // relay re-publishes it post-commit. Crashing before the
+        // relay runs leaves the event durably stored in the outbox
+        // table — no dropped events.
+        const event = new SessionCreated(
+          this.idGenerator.generate(),
+          this.clock.now(),
+          persisted.id,
+          persisted.userId,
+          requiresMfa,
+        );
+        await this.outbox.append(tx, event);
         return { session: persisted };
       },
     );
-
-    // Publish domain event post-commit (sharp edge: same pattern as in
-    // RegisterUserUseCase).
-    await this.eventBus.publishAll([
-      new SessionCreated(
-        this.idGenerator.generate(),
-        this.clock.now(),
-        saved.session.id,
-        saved.session.userId,
-        requiresMfa,
-      ),
-    ]);
 
     // Audit: authentication.login.succeeded.
     await this.recordAuditEventUc.execute({

@@ -12,6 +12,7 @@
 export * from './errors/domain-error';
 export * from './events/domain-event';
 export * from './events/event-bus.port';
+export * from './events/outbox.port';
 export * from './clock/clock.port';
 export * from './ids/id-generator.port';
 export * from './value-objects/email';
