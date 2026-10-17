@@ -104,6 +104,47 @@ export const envValidationSchema = Joi.object({
 
   GRAPHQL_INTROSPECTION: Joi.boolean().default(true),
   GRAPHQL_PLAYGROUND: Joi.boolean().default(true),
+
+  // --------------------------------------------------------------------
+  // V1.5 retention cleanup — see src/cleanup/ for the cron wiring.
+  // Each table has its own TTL (hours or days). The cron schedule
+  // is a standard 5-field expression; CLEANUP_SCHEDULE='' disables
+  // the cron entirely.
+  // --------------------------------------------------------------------
+  CLEANUP_SCHEDULE: Joi.string().allow('').default('0 * * * *'),
+  CLEANUP_EMAIL_VERIFICATION_TTL_HOURS: Joi.number()
+    .integer()
+    .min(0)
+    .max(24 * 365)
+    .default(0),
+  CLEANUP_PASSWORD_RESET_TTL_HOURS: Joi.number()
+    .integer()
+    .min(0)
+    .max(24 * 365)
+    .default(0),
+  CLEANUP_INVITATION_TTL_DAYS: Joi.number()
+    .integer()
+    .min(0)
+    .max(3650)
+    .default(30),
+  CLEANUP_SESSION_TTL_DAYS: Joi.number().integer().min(0).max(3650).default(30),
+  CLEANUP_APP_KEY_TTL_DAYS: Joi.number().integer().min(0).max(3650).default(90),
+  CLEANUP_ADMIN_KEY_TTL_DAYS: Joi.number()
+    .integer()
+    .min(0)
+    .max(3650)
+    .default(90),
+  CLEANUP_SIGNING_KEY_TTL_DAYS: Joi.number()
+    .integer()
+    .min(0)
+    .max(3650)
+    .default(7),
+  CLEANUP_RECOVERY_CODE_TTL_DAYS: Joi.number()
+    .integer()
+    .min(0)
+    .max(3650)
+    .default(90),
+  CLEANUP_OUTBOX_TTL_DAYS: Joi.number().integer().min(0).max(3650).default(7),
 });
 
 /**

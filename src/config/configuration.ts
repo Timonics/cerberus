@@ -111,6 +111,36 @@ export interface AppConfig {
     responseTimeoutMs: number;
   };
 
+  /**
+   * V1.5 retention policy — how long to keep expired/revoked rows
+   * before the cleanup cron deletes them. Each table has its own
+   * TTL; see the audit at docs/audits/<date>-current-state.md for
+   * the rationale per table. Set any value to 0 to disable cleanup
+   * for that table (rows live forever).
+   */
+  cleanup: {
+    /** Cron expression. Default: `0 * * * *` (top of every hour). */
+    schedule: string;
+    /** Email verifications: delete when `expiresAt < now()`. */
+    emailVerificationTtlHours: number;
+    /** Password resets: delete when `expiresAt < now()`. */
+    passwordResetTtlHours: number;
+    /** Invitations: delete when `expiresAt < now() - ttl`. */
+    invitationTtlDays: number;
+    /** Sessions: delete when `revokedAt < now() - ttl`. */
+    sessionTtlDays: number;
+    /** App API keys: delete when `revokedAt < now() - ttl`. */
+    appKeyTtlDays: number;
+    /** Admin API keys: delete when `revokedAt < now() - ttl`. */
+    adminKeyTtlDays: number;
+    /** Signing keys: delete when `isCurrent=false AND expiresAt < now() - ttl`. */
+    signingKeyTtlDays: number;
+    /** Recovery codes: delete when `usedAt < now() - ttl`. */
+    recoveryCodeTtlDays: number;
+    /** Outbox events: delete when `processedAt < now() - ttl`. */
+    outboxTtlDays: number;
+  };
+
   graphql: {
     /** Enable GraphQL introspection (SDL schema). */
     introspectionEnabled: boolean;
@@ -204,6 +234,30 @@ export const configuration = (): AppConfig => {
       // 30s response timeout — handlers that take longer than this
       // are pathological and should fail loud, not hang.
       responseTimeoutMs: Number(process.env.HTTP_RESPONSE_TIMEOUT_MS ?? 30_000),
+    },
+
+    cleanup: {
+      // Default: top of every hour. Tests + dev can override to a
+      // less common schedule (e.g. nightly). Setting
+      // CLEANUP_SCHEDULE='' disables the cron entirely.
+      schedule: process.env.CLEANUP_SCHEDULE ?? '0 * * * *',
+      // 0 = delete expired rows immediately; positive = keep them
+      // around for an additional grace window before deletion.
+      emailVerificationTtlHours: Number(
+        process.env.CLEANUP_EMAIL_VERIFICATION_TTL_HOURS ?? 0,
+      ),
+      passwordResetTtlHours: Number(
+        process.env.CLEANUP_PASSWORD_RESET_TTL_HOURS ?? 0,
+      ),
+      invitationTtlDays: Number(process.env.CLEANUP_INVITATION_TTL_DAYS ?? 30),
+      sessionTtlDays: Number(process.env.CLEANUP_SESSION_TTL_DAYS ?? 30),
+      appKeyTtlDays: Number(process.env.CLEANUP_APP_KEY_TTL_DAYS ?? 90),
+      adminKeyTtlDays: Number(process.env.CLEANUP_ADMIN_KEY_TTL_DAYS ?? 90),
+      signingKeyTtlDays: Number(process.env.CLEANUP_SIGNING_KEY_TTL_DAYS ?? 7),
+      recoveryCodeTtlDays: Number(
+        process.env.CLEANUP_RECOVERY_CODE_TTL_DAYS ?? 90,
+      ),
+      outboxTtlDays: Number(process.env.CLEANUP_OUTBOX_TTL_DAYS ?? 7),
     },
 
     graphql: {

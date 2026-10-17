@@ -15,6 +15,7 @@ import { EngagementModule } from './engagement/engagement.module';
 import { AppsModule } from './apps/apps.module';
 import { GraphqlModule } from './graphql/graphql.module';
 import { AdminModule } from './administration/administration.module';
+import { CleanupModule } from './cleanup/cleanup.module';
 import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
 
 /**
@@ -53,6 +54,7 @@ import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
     AppsModule,
     AdminModule,
     GraphqlModule,
+    CleanupModule,
     HealthModule,
   ],
   providers: [

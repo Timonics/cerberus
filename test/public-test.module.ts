@@ -29,6 +29,7 @@ import { EngagementModule } from '../src/engagement/engagement.module';
 import { AppsModule } from '../src/apps/apps.module';
 import { GraphqlModule } from '../src/graphql/graphql.module';
 import { AdminModule } from '../src/administration/administration.module';
+import { CleanupModule } from '../src/cleanup/cleanup.module';
 import { DomainErrorFilter } from '../src/shared/interfaces/domain-error.filter';
 import { GraphqlDomainErrorFilter } from '../src/graphql/graphql-domain-error.filter';
 
@@ -52,6 +53,7 @@ import { GraphqlDomainErrorFilter } from '../src/graphql/graphql-domain-error.fi
     AppsModule,
     AdminModule,
     GraphqlModule,
+    CleanupModule,
   ],
   providers: [
     {
