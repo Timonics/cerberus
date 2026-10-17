@@ -84,6 +84,15 @@ export interface AppConfig {
     ttl: number;
     /** Max requests per window per key. */
     max: number;
+    /**
+     * Per-email limit. Distinct from `max` (which is the per-IP
+     * default) — an attacker rotating IPs but targeting one
+     * account would never trip the per-IP bucket, so we add a
+     * second bucket keyed on the request body's email field.
+     * Set to 0 to disable the per-email bucket entirely (NOT
+     * recommended — closes a real brute-force gap from V1.4).
+     */
+    perEmailMax: number;
   };
 
   /**
@@ -224,6 +233,10 @@ export const configuration = (): AppConfig => {
     rateLimit: {
       ttl: Number(process.env.RATE_LIMIT_TTL ?? 60),
       max: Number(process.env.RATE_LIMIT_MAX ?? 60),
+      // Per-email bucket. Default 10/min — half the per-IP default
+      // (20/min on login). Set RATE_LIMIT_PER_EMAIL_MAX=0 to
+      // disable (only do this in tests).
+      perEmailMax: Number(process.env.RATE_LIMIT_PER_EMAIL_MAX ?? 10),
     },
 
     http: {

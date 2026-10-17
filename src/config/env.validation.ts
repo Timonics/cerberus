@@ -80,6 +80,10 @@ export const envValidationSchema = Joi.object({
   // --------------------------------------------------------------------
   RATE_LIMIT_TTL: Joi.number().integer().positive().default(60),
   RATE_LIMIT_MAX: Joi.number().integer().positive().default(60),
+  // Per-email rate limit (separate bucket). 0 disables. Default is
+  // half of the per-IP max — login's @Throttle(60, 20) means a
+  // legitimate user rotating IPs (laptop + phone) won't trip this.
+  RATE_LIMIT_PER_EMAIL_MAX: Joi.number().integer().min(0).default(10),
 
   // V1.5: HTTP hardening — body size + request/response timeouts.
   // Defaults match the values in src/config/configuration.ts; the
