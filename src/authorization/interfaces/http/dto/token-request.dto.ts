@@ -9,11 +9,17 @@ import { IsIn, IsOptional, IsString } from 'class-validator';
  *   * `refresh_token` — exchange a refresh token for a fresh access
  *     token (and optionally a new refresh token).
  *
+ * V1.6 adds:
+ *   * `client_credentials` — RFC 6749 §4.4. The App's UUID is the
+ *     `client_id`, the plaintext key returned at register-time is
+ *     the `client_secret`. No refresh_token in the response — apps
+ *     re-mint when needed.
+ *
  * The endpoint accepts both application/x-www-form-urlencoded and JSON.
  */
 export class TokenRequestDto {
-  @IsIn(['password', 'refresh_token'])
-  public grant_type!: 'password' | 'refresh_token';
+  @IsIn(['password', 'refresh_token', 'client_credentials'])
+  public grant_type!: 'password' | 'refresh_token' | 'client_credentials';
 
   // username + password (for grant_type=password)
   @IsOptional()
@@ -29,10 +35,30 @@ export class TokenRequestDto {
   @IsString()
   public refresh_token?: string;
 
+  // client_credentials grant (RFC 6749 §4.4)
   /**
-   * Optional scope restriction. Must be a subset of what the user
-   * (or refresh-token-bound session) is allowed. V1: ignored — we
-   * issue the full default scope set.
+   * App UUID. Equivalent to the X-Cerberus-App-Id header that
+   * register/login flows use today — same identifier, different
+   * transport (form body vs header).
+   */
+  @IsOptional()
+  @IsString()
+  public client_id?: string;
+
+  /**
+   * Plaintext App API key. Equivalent to the X-Cerberus-App-Secret
+   * header. Stored only as argon2id hash on the server side.
+   */
+  @IsOptional()
+  @IsString()
+  public client_secret?: string;
+
+  /**
+   * Optional scope restriction. Must be a subset of what the app's
+   * allowedScopes allowlist permits. V1.6: enforced via the
+   * client_credentials grant; ignored on password / refresh_token
+   * (the user-bound token is always issued with the full default
+   * scope set derived from the user's role).
    */
   @IsOptional()
   @IsString()

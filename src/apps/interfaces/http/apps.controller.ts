@@ -85,6 +85,7 @@ export class AppsController {
       contactEmail: body.contactEmail,
       notes: body.notes,
       ttlSeconds: body.ttlSeconds,
+      initialScopes: body.initialScopes,
     });
     return {
       app: {
@@ -95,6 +96,7 @@ export class AppsController {
         contactEmail: app.contactEmail,
         createdAt: app.createdAt.toISOString(),
         notes: app.notes,
+        allowedScopes: app.allowedScopes,
       },
       // Plaintext returned ONCE — never retrievable again.
       apiKey: plaintextApiKey,

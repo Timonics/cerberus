@@ -42,6 +42,20 @@ export class RegisterAppDto {
   @Min(60) // 1 minute minimum
   @Max(60 * 60 * 24 * 365) // 1 year maximum
   public ttlSeconds!: number;
+
+  /**
+   * V1.6 client_credentials grant: comma-separated OAuth2 scopes
+   * the app is allowed to request via /v1/oauth/token.
+   * Optional — empty means "no scopes" (the app can mint a
+   * token but gets zero). Empty default is safer than a
+   * permissive "auth:read auth:write" because a freshly-registered
+   * app shouldn't auto-claim any privileges — the operator must
+   * explicitly grant them via the admin API.
+   */
+  @IsOptional()
+  @IsString()
+  @Length(0, 1024)
+  public initialScopes?: string;
 }
 
 export class RotateAppApiKeyDto {

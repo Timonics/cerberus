@@ -60,6 +60,7 @@ export class PrismaAppRepository extends AppRepository {
         contactEmail: app.contactEmail,
         revokedAt: app.revokedAt,
         notes: app.notes,
+        allowedScopes: app.allowedScopes,
       },
       update: {
         name: app.name,
@@ -67,6 +68,7 @@ export class PrismaAppRepository extends AppRepository {
         defaultOrgSlug: app.defaultOrgSlug,
         revokedAt: app.revokedAt,
         notes: app.notes,
+        allowedScopes: app.allowedScopes,
       },
     });
     // Upsert the current key row, if any.
@@ -103,6 +105,7 @@ export class PrismaAppRepository extends AppRepository {
     contactEmail: string;
     revokedAt: Date | null;
     notes: string | null;
+    allowedScopes: string | null;
     apiKeys?: Array<{
       id: string;
       appId: string;
@@ -126,6 +129,7 @@ export class PrismaAppRepository extends AppRepository {
       contactEmail: row.contactEmail,
       revokedAt: row.revokedAt,
       notes: row.notes,
+      allowedScopes: row.allowedScopes ?? '',
       currentKey: liveKey ? this.toKeyDomain(liveKey) : null,
     });
   }
@@ -140,6 +144,7 @@ export class PrismaAppRepository extends AppRepository {
       contactEmail: string;
       revokedAt: Date | null;
       notes: string | null;
+      allowedScopes: string | null;
       apiKeys: Array<{
         id: string;
         appId: string;
@@ -164,6 +169,7 @@ export class PrismaAppRepository extends AppRepository {
       contactEmail: row.app.contactEmail,
       revokedAt: row.app.revokedAt,
       notes: row.app.notes,
+      allowedScopes: row.app.allowedScopes ?? '',
       currentKey: liveKey ? this.toKeyDomain(liveKey) : null,
     });
   }

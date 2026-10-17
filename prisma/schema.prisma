@@ -449,6 +449,15 @@ model App {
   /// register call falls through to email-domain / personal-org
   /// resolution.
   defaultOrgSlug String?    @db.VarChar(80)
+  /// V1.6 (Cerberus client_credentials grant): comma-separated
+  /// allowlist of OAuth2 scopes the app may request via the
+  /// client_credentials grant. Empty string = no scopes
+  /// (the app can authenticate via /v1/oauth/token but cannot
+  /// do anything). Operator populates this at registration or
+  /// via the admin API; the client_credentials use case
+  /// downgrades caller-requested scope to this list (RFC 6749
+  /// §3.3). Max 1024 chars — supports ~100 typical scopes.
+  allowedScopes String     @default("") @db.VarChar(1024)
   createdAt      DateTime   @default(now())
   /// Contact email for the registering developer (used in audit
   /// trail — never shared with users).

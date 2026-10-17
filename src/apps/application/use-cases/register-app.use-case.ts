@@ -24,6 +24,8 @@ export interface RegisterAppInput {
   contactEmail: string;
   notes?: string;
   ttlSeconds: number;
+  /** V1.6 client_credentials grant: initial OAuth2 scope allowlist. */
+  initialScopes?: string;
 }
 
 export interface RegisterAppResult {
@@ -81,6 +83,7 @@ export class RegisterAppUseCase {
         clock: this.clock,
         notes: input.notes,
         initialKey,
+        allowedScopes: input.initialScopes,
       });
       return this.repo.save(tx, a);
     });
@@ -94,6 +97,7 @@ export class RegisterAppUseCase {
         appId: app.id,
         name: app.name,
         defaultOrgSlug: app.defaultOrgSlug,
+        allowedScopes: app.allowedScopes,
       },
     });
 

@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { AuthenticationModule } from '../authentication/authentication.module';
+import { AppsModule } from '../apps/apps.module';
 import { JwtSignerService } from './infrastructure/crypto/jwt-signer.service';
 import { JwtAuthGuard } from './interfaces/security/jwt-auth.guard';
 import { ScopesGuard } from './interfaces/security/scopes.guard';
@@ -8,6 +9,7 @@ import { PrismaSigningKeyRepository } from './infrastructure/persistence/prisma-
 import { GetJwksUseCase } from './application/use-cases/get-jwks.use-case';
 import { IntrospectTokenUseCase } from './application/use-cases/introspect-token.use-case';
 import { IssueAccessTokenUseCase } from './application/use-cases/issue-access-token.use-case';
+import { IssueClientCredentialsAccessTokenUseCase } from './application/use-cases/issue-client-credentials-access-token.use-case';
 import { RefreshTokenGrantUseCase } from './application/use-cases/refresh-token-grant.use-case';
 import { RevokeTokenUseCase } from './application/use-cases/revoke-token.use-case';
 import { RotateSigningKeyUseCase } from './application/use-cases/rotate-signing-key.use-case';
@@ -26,10 +28,18 @@ import { AuthorizationResolver } from './interfaces/graphql/authorization.resolv
  * Marked `@Global()` so `JwtSignerService` is injectable from anywhere
  * (the Identity / Authentication bounded contexts may want to verify
  * JWTs in V2). Use-cases are explicit exports.
+ *
+ * V1.6 (client_credentials grant): imports `AppsModule` + `IdentityModule`
+ * to resolve `AppRepository` (for the App lookup by `client_id`) and
+ * `OrganizationRepository` (for resolving `defaultOrgSlug` → tenant).
+ * Both are `@Global()` already; the explicit imports surface the dep
+ * at compile time. IdentityModule already imports AppsModule (it's
+ * how app credentials work for the `X-Cerberus-App-Id` header), so we
+ * declare the same dependency here without creating a cycle.
  */
 @Global()
 @Module({
-  imports: [AuthenticationModule],
+  imports: [AuthenticationModule, AppsModule],
   controllers: [OAuthController, JwksController],
   providers: [
     // Infrastructure
@@ -47,6 +57,7 @@ import { AuthorizationResolver } from './interfaces/graphql/authorization.resolv
 
     // Use-cases
     IssueAccessTokenUseCase,
+    IssueClientCredentialsAccessTokenUseCase,
     RefreshTokenGrantUseCase,
     IntrospectTokenUseCase,
     RevokeTokenUseCase,

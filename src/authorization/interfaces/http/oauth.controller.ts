@@ -21,6 +21,7 @@ import { RevokeTokenUseCase } from '../../application/use-cases/revoke-token.use
 import { TokenInspectDto } from './dto/token-inspect.dto';
 import { TokenRequestDto } from './dto/token-request.dto';
 import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/verify-app-api-key.use-case';
+import { IssueClientCredentialsAccessTokenUseCase } from '../../application/use-cases/issue-client-credentials-access-token.use-case';
 
 /**
  * Authorization HTTP controller.
@@ -65,6 +66,7 @@ export class OAuthController {
     private readonly getJwksUc: GetJwksUseCase,
     private readonly loginUc: LoginUseCase,
     private readonly verifyAppApiKeyUc: VerifyAppApiKeyUseCase,
+    private readonly issueClientCredentialsUc: IssueClientCredentialsAccessTokenUseCase,
   ) {}
 
   /**
@@ -159,6 +161,45 @@ export class OAuthController {
         expires_in: refreshed.expiresIn,
         refresh_token: refreshed.refreshToken,
         scope: refreshed.scopes.join(' '),
+      });
+      return;
+    }
+
+    // V1.6 client_credentials grant (RFC 6749 §4.4). Service-to-
+    // service: Charon / an org's backend / a CI pipeline presents
+    // their App's `client_id` (= App UUID) + `client_secret`
+    // (plaintext API key from register-time) and gets back a JWT
+    // signed with the Cerberus signing key. The JWT carries
+    // `typ: 'app'` so resource servers can distinguish it from
+    // user-bound tokens without a separate apps-by-id cache.
+    //
+    // No refresh_token in the response — apps re-mint when
+    // needed. No MFA — apps don't have phones.
+    //
+    // The `X-Cerberus-App-Id` + `X-Cerberus-App-Secret` headers
+    // are accepted as an alternative transport (same shape as
+    // register/login) for callers that already have those wired up.
+    if (body.grant_type === 'client_credentials') {
+      const clientId = body.client_id ?? appId ?? '';
+      const clientSecret = body.client_secret ?? appSecret ?? '';
+      if (!clientId || !clientSecret) {
+        res.status(HttpStatus.BAD_REQUEST).json({
+          error: 'invalid_request',
+          error_description:
+            'client_id and client_secret are required for grant_type=client_credentials',
+        });
+        return;
+      }
+      const issued = await this.issueClientCredentialsUc.execute({
+        clientId,
+        clientSecret,
+        scope: body.scope ?? null,
+      });
+      res.json({
+        access_token: issued.accessToken,
+        token_type: 'Bearer',
+        expires_in: issued.expiresIn,
+        scope: issued.scope,
       });
       return;
     }

@@ -370,7 +370,15 @@ paths:
     post:
       tags: [Authentication]
       summary: OAuth2 token endpoint (RFC 6749)
-      description: Supports password and refresh_token grants.
+      description: |
+        Supports password, refresh_token, and client_credentials
+        (V1.6) grants. The client_credentials grant (RFC 6749 §4.4)
+        is the service-to-service flow: present your App's
+        `client_id` (App UUID) and `client_secret` (plaintext key
+        from register-time) and get back a JWT signed by Cerberus.
+        The JWT carries `typ: 'app'` so resource servers can
+        distinguish app-bound tokens from user-bound without an
+        apps-by-id cache.
       security: []
       requestBody:
         required: true
@@ -382,13 +390,13 @@ paths:
               properties:
                 grant_type:
                   type: string
-                  enum: [password, refresh_token]
+                  enum: [password, refresh_token, client_credentials]
                 username: { type: string }
                 password: { type: string, format: password }
                 refresh_token: { type: string }
                 scope: { type: string }
                 client_id: { type: string }
-                client_secret: { type: string }
+                client_secret: { type: string, format: password }
       responses:
         '200':
           description: Token issued
@@ -832,6 +840,15 @@ components:
         contactEmail: { type: string, format: email }
         notes: { type: string, maxLength: 500 }
         ttlSeconds: { type: integer, minimum: 1, default: 31536000 }
+        initialScopes:
+          type: string
+          maxLength: 1024
+          description: |
+            V1.6 — comma-separated OAuth2 scopes the app may request
+            via the client_credentials grant. Empty means "no
+            scopes" (the app can authenticate but gets zero).
+            Default empty — operator must explicitly grant via
+            the admin API.
 
     RegisterAppResult:
       type: object
@@ -845,6 +862,7 @@ components:
             defaultOrgSlug: { type: string, nullable: true }
             contactEmail: { type: string, nullable: true }
             notes: { type: string, nullable: true }
+            allowedScopes: { type: string, nullable: true }
             createdAt: { type: string, format: date-time }
             revokedAt: { type: string, format: date-time, nullable: true }
         apiKey:

@@ -81,8 +81,18 @@ import { AppsController } from './interfaces/http/apps.controller';
     },
   ],
   exports: [
+    // Provider tokens — re-export so modules importing AppsModule
+    // for the use cases can also resolve APP_REPOSITORY without a
+    // forwardRef or a manual re-import. Required for V1.6
+    // (client_credentials) — AuthorizationModule's
+    // IssueClientCredentialsAccessTokenUseCase injects
+    // APP_REPOSITORY and would otherwise fail DI resolution when
+    // AuthorizationModule is loaded before AppsModule in the
+    // test harness.
+    APP_REPOSITORY,
     Argon2AppApiKeyHasher,
     APP_API_KEY_HASHER,
+    // Use-cases
     RegisterAppUseCase,
     RotateAppApiKeyUseCase,
     RevokeAppUseCase,

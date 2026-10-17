@@ -3,6 +3,27 @@ import { Clock, DomainError } from '../../../shared/domain';
 import { AppApiKey } from './app-api-key';
 
 /**
+ * Parse a comma-separated scopes string into a deduplicated,
+ * trimmed list. Empty / whitespace-only inputs become an empty
+ * array — the caller then sees zero scopes (RFC 6749 §3.3:
+ * the server is the authority on what's allowed).
+ *
+ * Used by both the App aggregate (to expose `allowedScopesList`)
+ * and the OAuth client_credentials use case (to compute the
+ * downgraded scope set).
+ */
+export function parseScopeList(csv: string): string[] {
+  return Array.from(
+    new Set(
+      csv
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  );
+}
+
+/**
  * A registered third-party application that integrates with Cerberus.
  *
  * Apps identify themselves via `X-Cerberus-App-Id` + `X-Cerberus-App-Secret`
@@ -25,11 +46,19 @@ export class App {
     public readonly name: string,
     public readonly description: string | null,
     public readonly defaultOrgSlug: string | null,
-    public readonly createdAt: Date,
     public readonly contactEmail: string,
+    public readonly createdAt: Date,
     public readonly revokedAt: Date | null,
     public readonly notes: string | null,
     public readonly currentKey: AppApiKey | null,
+    /**
+     * V1.6 client_credentials grant: comma-separated OAuth2 scopes
+     * the app is allowed to request via /v1/oauth/token.
+     * Parsed on demand via `allowedScopesList` — the raw string
+     * is what's persisted, so the JSON column never has to
+     * reorder / dedupe on read.
+     */
+    public readonly allowedScopes: string,
   ) {}
 
   public static register(params: {
@@ -42,6 +71,8 @@ export class App {
     notes?: string;
     /** Pre-generated `AppApiKey` aggregate. */
     initialKey: AppApiKey;
+    /** V1.6: comma-separated OAuth2 scopes the app may request. */
+    allowedScopes?: string;
   }): App {
     const now = params.clock.now();
     return new App(
@@ -49,11 +80,12 @@ export class App {
       params.name.trim(),
       params.description?.trim() ?? null,
       params.defaultOrgSlug?.trim() ?? null,
-      now,
       params.contactEmail.trim().toLowerCase(),
+      now,
       null,
       params.notes?.trim() ?? null,
       params.initialKey,
+      params.allowedScopes?.trim() ?? '',
     );
   }
 
@@ -67,17 +99,19 @@ export class App {
     revokedAt: Date | null;
     notes: string | null;
     currentKey: AppApiKey | null;
+    allowedScopes?: string;
   }): App {
     return new App(
       params.id,
       params.name,
       params.description,
       params.defaultOrgSlug,
-      params.createdAt,
       params.contactEmail,
+      params.createdAt,
       params.revokedAt,
       params.notes,
       params.currentKey,
+      params.allowedScopes ?? '',
     );
   }
 
@@ -88,11 +122,12 @@ export class App {
       this.name,
       this.description,
       this.defaultOrgSlug,
-      this.createdAt,
       this.contactEmail,
+      this.createdAt,
       clock.now(),
       this.notes,
       this.currentKey,
+      this.allowedScopes,
     );
   }
 
@@ -109,11 +144,12 @@ export class App {
       this.name,
       this.description,
       this.defaultOrgSlug,
-      this.createdAt,
       this.contactEmail,
+      this.createdAt,
       this.revokedAt,
       this.notes,
       newKey,
+      this.allowedScopes,
     );
   }
 
@@ -124,6 +160,35 @@ export class App {
 
   public hasOrgBinding(): boolean {
     return this.defaultOrgSlug !== null && this.defaultOrgSlug.length > 0;
+  }
+
+  /**
+   * Parsed + deduped + trimmed list of OAuth2 scopes this app is
+   * allowed to request via the client_credentials grant. Empty
+   * when `allowedScopes` is unset / whitespace-only.
+   */
+  public allowedScopesList(): string[] {
+    return parseScopeList(this.allowedScopes);
+  }
+
+  /**
+   * V1.6: operator-side scope update. Returns a new App with the
+   * given scope string. Empty string clears the allowlist (the
+   * app can authenticate but receives zero scopes).
+   */
+  public withAllowedScopes(csv: string): App {
+    return new App(
+      this.id,
+      this.name,
+      this.description,
+      this.defaultOrgSlug,
+      this.contactEmail,
+      this.createdAt,
+      this.revokedAt,
+      this.notes,
+      this.currentKey,
+      csv.trim(),
+    );
   }
 }
 

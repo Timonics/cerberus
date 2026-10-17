@@ -38,6 +38,12 @@ export const AUDIT_EVENT_TYPES = [
   'apps.app.registered',
   'apps.app.key_rotated',
   'apps.app.revoked',
+  // V1.6 client_credentials grant: emitted when Cerberus mints a
+  // JWT for an App via the OAuth2 client_credentials grant. Mirrors
+  // `authorization.token.minted` for user-bound tokens. userId on
+  // the audit row is the App UUID (free-form text column — apps
+  // don't have a User UUID).
+  'apps.token.issued',
   // Authorization
   'authorization.token.minted',
   'authorization.token.revoked',
