@@ -72,6 +72,14 @@ export type DomainErrorCode =
   | 'app.organization.not_found'
   | 'app.auth.missing'
   | 'app.auth.invalid'
+  // V1.7: bad client_id or client_secret on the client_credentials
+  // grant. Mapped to 401 + WWW-Authenticate: Basic by
+  // DomainErrorFilter. Kept distinct from `app.auth.invalid`
+  // (used by the admin-side key guard) so the audit + observability
+  // layer can tell apart "API key was rejected by the guard" from
+  // "OAuth2 client_credentials grant was rejected at the token
+  // endpoint" without parsing the message.
+  | 'app.auth.failed'
   // Generic
   | 'domain.invariant_violation'
   | 'domain.illegal_state';

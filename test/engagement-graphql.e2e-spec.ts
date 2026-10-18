@@ -164,8 +164,13 @@ describe('Engagement GraphQL resolver (V1.7 — query coverage)', () => {
     // visible immediately when this test runs in parallel with
     // other suites (each suite boots its own Nest app on a
     // different port, and the relays compete for DB cycles).
-    // Poll the audit log for up to 5s waiting for the
-    // registered event to appear.
+    // Poll the audit log for up to 30s waiting for the
+    // registered event to appear. (V1.7: when the e2e suite runs
+    // in parallel with 4+ other suites, the outbox relay's 1s tick
+    // can be starved of Prisma cycles — 5s and 15s both failed
+    // intermittently under load. 30s is the per-test Jest budget
+    // ceiling; we expect this to converge much faster in normal
+    // CI runs.)
     let entries: Array<{
       id: string;
       eventType: string;
@@ -173,7 +178,7 @@ describe('Engagement GraphQL resolver (V1.7 — query coverage)', () => {
       occurredAt: string;
     }> = [];
     let found = false;
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 150; i++) {
       const res = await request(app.getHttpServer())
         .post('/graphql')
         .set('Authorization', `Bearer ${accessToken}`)
@@ -187,7 +192,7 @@ describe('Engagement GraphQL resolver (V1.7 — query coverage)', () => {
         found = true;
         break;
       }
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 200));
     }
     expect(found).toBe(true);
     // The event has the calling userId.

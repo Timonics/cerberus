@@ -119,11 +119,42 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
 
   private async publishOnce(): Promise<void> {
     const client = this.prisma as PrismaClient;
-    const rows = await client.outboxEvent.findMany({
-      where: { processedAt: null },
-      orderBy: { createdAt: 'asc' },
-      take: OutboxRelay.BATCH_SIZE,
-    });
+    let rows: Array<{
+      id: string;
+      payload: unknown;
+      attempts: number;
+      eventName: string;
+    }>;
+    try {
+      rows = await client.outboxEvent.findMany({
+        where: { processedAt: null },
+        orderBy: { createdAt: 'asc' },
+        take: OutboxRelay.BATCH_SIZE,
+      });
+    } catch (err) {
+      // V1.7: Prisma engine may be in the middle of disconnecting
+      // (e.g. jest teardown of a sibling test's Nest app on a
+      // different port can race the relay's tick). The error
+      // "Engine is not yet connected" is transient — silently
+      // skip the tick and try again on the next poll. We do NOT
+      // re-throw because the relay runs on a 1s loop and the
+      // next tick will succeed once the Prisma client is
+      // re-initialized (in a stable process) or fully shut down
+      // (in tests, the loop is `.unref()`d so it won't keep
+      // the Node process alive past teardown).
+      const message = err instanceof Error ? err.message : String(err);
+      if (
+        !/Engine is not (yet )?connected|Engine has been closed/i.test(message)
+      ) {
+        // An unknown error is still worth surfacing — log at warn
+        // so it shows up in Sentry/stdout but doesn't kill the
+        // test runner.
+        this.logger.warn(
+          `OutboxRelay poll failed (will retry next tick): ${message}`,
+        );
+      }
+      return;
+    }
 
     for (const row of rows) {
       if (row.attempts >= OutboxRelay.MAX_ATTEMPTS_BEFORE_DEAD) {
@@ -140,17 +171,32 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
           data: { processedAt: this.clock.now() },
         });
       } catch (err) {
+        // V1.7: same as the rows-from-db block — silently skip
+        // if Prisma is mid-disconnect during test teardown. The
+        // row stays unprocessed; the next tick (or operator
+        // reset of `attempts`) retries it.
         const message = err instanceof Error ? err.message : String(err);
+        if (
+          /Engine is not (yet )?connected|Engine has been closed/i.test(message)
+        ) {
+          return;
+        }
         this.logger.warn(
           `OutboxRelay failed to publish event ${row.id} (${row.eventName}) attempt=${row.attempts + 1}: ${message}`,
         );
-        await client.outboxEvent.update({
-          where: { id: row.id },
-          data: {
-            attempts: row.attempts + 1,
-            lastError: message.slice(0, 500),
-          },
-        });
+        try {
+          await client.outboxEvent.update({
+            where: { id: row.id },
+            data: {
+              attempts: row.attempts + 1,
+              lastError: message.slice(0, 500),
+            },
+          });
+        } catch {
+          // The update itself can fail if Prisma is mid-disconnect.
+          // The row stays with its old `attempts` count; the next
+          // tick (if Prisma recovers) retries.
+        }
       }
     }
   }

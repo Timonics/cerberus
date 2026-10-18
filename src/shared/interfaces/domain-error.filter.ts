@@ -62,6 +62,14 @@ export class DomainErrorFilter implements ExceptionFilter {
     this.logger.debug(
       `[${status}] ${request.method} ${request.url} -> ${exception.code}: ${exception.message}`,
     );
+    if (status === HttpStatus.UNAUTHORIZED) {
+      // V1.7: RFC 6749 §5.2 — for the client_credentials grant, the
+      // server MUST include a `WWW-Authenticate: Basic` header on
+      // 401 responses so the client can discover the auth scheme.
+      // We send it for ALL 401s (not just OAuth2) because the
+      // header is the same and it costs nothing.
+      response.setHeader('WWW-Authenticate', 'Basic realm="cerberus"');
+    }
     response.status(status).json(exception.toJSON());
   }
 
@@ -98,6 +106,7 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'admin.forbidden':
       case 'app.auth.missing':
       case 'app.auth.invalid':
+      case 'app.auth.failed': // V1.7: RFC 6749 §5.2 — client_credentials grant returns 401 with WWW-Authenticate for bad client_id/client_secret
       case 'app.api_key.revoked':
       case 'app.api_key.expired':
       case 'app.api_key.not_found':

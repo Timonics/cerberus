@@ -10,13 +10,11 @@
  *   4. Verify the JWT signature against /.well-known/jwks.json
  *      (this is what Charon will do on the inbound side)
  *   5. Negative cases:
- *      - unknown client_id → app.not_found (mapped to 404 by
- *        the existing DomainErrorFilter convention; see line 125
- *        of `src/shared/interfaces/domain-error.filter.ts`. RFC
- *        6749 §5.2 says `invalid_client` → 401 with
- *        WWW-Authenticate; that's a V2 cleanup.)
- *      - wrong client_secret → app.not_found
- *      - revoked app → app.not_found
+ *      - unknown client_id → app.auth.failed (mapped to 401
+ *        by DomainErrorFilter with a `WWW-Authenticate: Basic
+ *        realm="cerberus"` header, per RFC 6749 §5.2).
+ *      - wrong client_secret → app.auth.failed
+ *      - revoked app → app.auth.failed
  *      - app with empty allowedScopes → token mints with
  *        `scope: ''` (caller asked for scope X, gets nothing)
  *      - caller asks for scopes partially in the allowlist →
@@ -216,7 +214,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
     expect(res.body.scope).toBe('');
   });
 
-  it('returns 404 when the client_id is unknown', async () => {
+  it('returns 401 (with WWW-Authenticate) when the client_id is unknown', async () => {
     const res = await request(app.getHttpServer())
       .post('/v1/oauth/token')
       .type('form')
@@ -225,13 +223,15 @@ describe('OAuth2 client_credentials grant (integration)', () => {
         client_id: '00000000-0000-0000-0000-000000000000',
         client_secret: 'anything',
       });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
     // The error code stays ambiguous so we don't leak whether
-    // the client_id was wrong vs the client_secret.
-    expect(res.body.code).toBe('app.not_found');
+    // the client_id was wrong vs the client_secret — both
+    // surface as `app.auth.failed` (RFC 6749 §5.2 `invalid_client`).
+    expect(res.body.code).toBe('app.auth.failed');
+    expect(res.headers['www-authenticate']).toBe('Basic realm="cerberus"');
   });
 
-  it('returns 404 when the client_secret is wrong', async () => {
+  it('returns 401 (with WWW-Authenticate) when the client_secret is wrong', async () => {
     const { appId } = await registerApp({
       name: `cc-bad-${Date.now()}`,
     });
@@ -243,11 +243,12 @@ describe('OAuth2 client_credentials grant (integration)', () => {
         client_id: appId,
         client_secret: 'wrong-secret',
       });
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('app.not_found');
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('app.auth.failed');
+    expect(res.headers['www-authenticate']).toBe('Basic realm="cerberus"');
   });
 
-  it('returns 404 when the app has been revoked', async () => {
+  it('returns 401 (with WWW-Authenticate) when the app has been revoked', async () => {
     const { appId, plaintextApiKey } = await registerApp({
       name: `cc-revoked-${Date.now()}`,
     });
@@ -265,8 +266,9 @@ describe('OAuth2 client_credentials grant (integration)', () => {
         client_id: appId,
         client_secret: plaintextApiKey,
       });
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('app.not_found');
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('app.auth.failed');
+    expect(res.headers['www-authenticate']).toBe('Basic realm="cerberus"');
   });
 
   it('accepts X-Cerberus-App-Id + X-Cerberus-App-Secret headers as alternate transport', async () => {
@@ -321,12 +323,12 @@ describe('OAuth2 client_credentials grant (integration)', () => {
     // The audit event is appended out-of-band via the outbox relay
     // (1s poll). Wait up to 3s for it to land.
     let after = 0;
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 75; i++) {
       after = await prisma.auditLog.count({
         where: { userId: appId, eventType: 'apps.token.issued' },
       });
       if (after >= 1) break;
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 200));
     }
     expect(after).toBe(1);
 

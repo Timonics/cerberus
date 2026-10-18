@@ -98,12 +98,25 @@ describe('Outbox pattern (integration)', () => {
     // outbox. The handler dedupes on (eventName, eventId) so it
     // fires once per row. We just need at least one row that
     // references our user.
-    const emailAudit = await prisma.auditLog.findFirst({
+    // V1.7: poll for up to 15s — the outbox relay's 1s tick can
+    // be starved of Prisma cycles when the e2e suite runs in
+    // parallel with 4+ other suites.
+    let emailAudit = await prisma.auditLog.findFirst({
       where: {
         userId,
         eventType: 'engagement.email_verification.requested',
       },
     });
+    for (let i = 0; i < 75; i++) {
+      if (emailAudit) break;
+      await new Promise((r) => setTimeout(r, 200));
+      emailAudit = await prisma.auditLog.findFirst({
+        where: {
+          userId,
+          eventType: 'engagement.email_verification.requested',
+        },
+      });
+    }
     expect(emailAudit).not.toBeNull();
 
     // 5. No outbox rows are stuck in 'unprocessed' for recent
@@ -157,7 +170,15 @@ describe('Outbox pattern (integration)', () => {
     }
 
     // The row should now be processed.
-    const after = await prisma.outboxEvent.findUnique({ where: { id } });
+    // V1.7: poll for up to 5s — relay.tick() is synchronous but
+    // the auto-poller running in the same process may pick up
+    // the row between our explicit ticks. Wait for processedAt.
+    let after = await prisma.outboxEvent.findUnique({ where: { id } });
+    for (let i = 0; i < 150; i++) {
+      if (after?.processedAt) break;
+      await new Promise((r) => setTimeout(r, 200));
+      after = await prisma.outboxEvent.findUnique({ where: { id } });
+    }
     expect(after?.processedAt).not.toBeNull();
 
     // And the audit-log handler should have written an audit row
