@@ -27,6 +27,12 @@ tags:
     description: Admin override on user accounts.
   - name: AdminAudit
     description: Audit log search.
+  - name: AdminKeys
+    description: Signing-key rotation.
+  - name: AdminOrgs
+    description: Organization creation.
+  - name: AdminOutbox
+    description: Outbox event inspection (dead-letter view).
 
 security:
   - adminApiKey: []
@@ -241,6 +247,122 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DomainError' }
 
+  /admin/keys/rotate:
+    post:
+      tags: [AdminKeys]
+      summary: Rotate the JWT signing key
+      description: |
+        Idempotent. If the current key was rotated within the
+        last minute, returns the existing current key without
+        minting a new one. Otherwise, mints a new key, marks the
+        previous as `retired`, and returns the new key's `kid`.
+        The retired key continues to verify for its `expiresAt`
+        window so outstanding JWTs stay valid.
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: New key minted (or existing key returned)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RotateSigningKeyResult' }
+        '401':
+          description: Admin key missing or invalid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '403':
+          description: IP not in allowlist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /admin/orgs:
+    post:
+      tags: [AdminOrgs]
+      summary: Create an organization
+      description: |
+        Creates a new organization with the given slug + name.
+        The slug must be unique. The org is then available for
+        users to join on register (via the `organizationSlug`
+        parameter) or on the user's first login (auto-derived
+        from the email domain).
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateOrganizationInput' }
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationView' }
+        '400':
+          description: Validation error (slug length, etc.)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '401':
+          description: Admin key missing or invalid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '403':
+          description: IP not in allowlist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '409':
+          description: Slug already in use
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
+  /admin/outbox/dead:
+    get:
+      tags: [AdminOutbox]
+      summary: List dead-lettered outbox events (V1.7 audit fix #27)
+      description: |
+        Returns outbox events that have been parked after
+        MAX_ATTEMPTS_BEFORE_DEAD (10) failed publish attempts.
+        These rows need operator intervention (manual retry or
+        investigation). Use the `lastError` field to triage.
+      parameters:
+        - in: header
+          name: X-Cerberus-Admin-Api-Key
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+          description: Max number of events to return.
+      responses:
+        '200':
+          description: Dead-lettered events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeadOutboxEventsResult' }
+        '401':
+          description: Admin key missing or invalid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+        '403':
+          description: IP not in allowlist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
+
 components:
   securitySchemes:
     adminApiKey:
@@ -337,3 +459,66 @@ components:
         userAgent: { type: string, nullable: true }
         occurredAt: { type: string, format: date-time }
       required: [id, eventType, payload, occurredAt]
+
+    RotateSigningKeyResult:
+      type: object
+      properties:
+        kid:
+          type: string
+          description: The new (or current) key id.
+        retiredKeyId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The id of the key that was just retired (null on the first rotate).
+      required: [kid, retiredKeyId]
+
+    CreateOrganizationInput:
+      type: object
+      required: [slug, name]
+      properties:
+        slug:
+          type: string
+          minLength: 3
+          maxLength: 80
+          description: URL-safe identifier (e.g. "acme-corp"). Must be unique.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+
+    OrganizationView:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+      required: [id, slug, name]
+
+    DeadOutboxEventsResult:
+      type: object
+      properties:
+        count:
+          type: integer
+          description: Number of items returned (also reflects the `limit` cap).
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DeadOutboxEvent' }
+      required: [count, items]
+
+    DeadOutboxEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventName: { type: string }
+        attempts: { type: integer, minimum: 10 }
+        lastError:
+          type: string
+          nullable: true
+          description: Last publisher error (operator triage hint).
+        createdAt: { type: string, format: date-time }
+      required: [id, eventName, attempts, createdAt]

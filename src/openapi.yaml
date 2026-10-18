@@ -52,6 +52,11 @@ security:
   - bearerAuth: []
 
 paths:
+  # Note: `GET /ready` is intentionally excluded from this spec.
+  # It is a k8s-style readiness probe that exercises Postgres +
+  # Redis (terminus check), not API surface. Operators hit it
+  # directly via the load-balancer health check, not via the
+  # OpenAPI client. Documented here for completeness.
   /health:
     get:
       tags: [Health]
