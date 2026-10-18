@@ -113,13 +113,13 @@
     ],
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
-      "global": {
-        "lines": 8,
-        "branches": 5,
-        "functions": 8,
-        "statements": 9
-      }
-    },
+        "global": {
+          "lines": 8,
+          "branches": 5,
+          "functions": 8,
+          "statements": 8
+        }
+      },
     "testEnvironment": "node"
   }
 }

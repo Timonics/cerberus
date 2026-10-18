@@ -9,6 +9,7 @@ import {
   Param,
   Patch,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { RegisterAppDto, RotateAppApiKeyDto } from './dto/apps.dto';
 import { RegisterAppUseCase } from '../../application/use-cases/register-app.use-case';
@@ -16,14 +17,20 @@ import { RotateAppApiKeyUseCase } from '../../application/use-cases/rotate-app-a
 import { RevokeAppUseCase } from '../../application/use-cases/revoke-app.use-case';
 import { Public } from '../../../authorization/interfaces/security/public.decorator';
 import { VerifyAppApiKeyUseCase } from '../../application/use-cases/verify-app-api-key.use-case';
+import { ProductionAdminGuard } from '../../../common/security/production-admin.guard';
 
 /**
  * App registration + key-rotation endpoints.
  *
  * V1.5 (audit C2) hardening:
- *   * `register` (POST /v1/apps) — still @Public for self-service.
- *     In production this should be locked to admin (TODO V2: gate
- *     on `NODE_ENV=production` + admin key).
+ *   * `register` (POST /v1/apps) — `@Public` in dev/staging so
+ *     an operator can spin up an app without first minting an
+ *     admin key. V1.7: behind `ProductionAdminGuard` which
+ *     requires a valid admin `Authorization: Bearer *** header
+ *     in `NODE_ENV=production` (or always, when
+ *     `REQUIRE_ADMIN_FOR_REGISTRATION=true`). The guard's
+ *     `domainErrorFilter` mapping turns a missing header into
+ *     `admin.auth.missing` → 401.
  *   * `rotateKey` (PATCH /v1/apps/:id/rotate-key) — now requires the
  *     app's CURRENT valid X-Cerberus-App-Id + X-Cerberus-App-Secret
  *     headers, and the `:id` URL param must match the X-Cerberus-App-Id.
@@ -75,6 +82,7 @@ export class AppsController {
   }
 
   @Public()
+  @UseGuards(ProductionAdminGuard)
   @Post()
   @HttpCode(HttpStatus.CREATED)
   public async register(@Body() body: RegisterAppDto) {

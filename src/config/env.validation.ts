@@ -85,6 +85,19 @@ export const envValidationSchema = Joi.object({
   // legitimate user rotating IPs (laptop + phone) won't trip this.
   RATE_LIMIT_PER_EMAIL_MAX: Joi.number().integer().min(0).default(10),
 
+  // V1.7: argon2id cost factors. Defaults match the pre-V1.7
+  // hard-coded values. Prod should set ARGON2_MEMORY_COST
+  // and ARGON2_TIME_COST to whatever brings verify time to
+  // the 250–500ms range on the actual hardware.
+  ARGON2_MEMORY_COST: Joi.number().integer().min(19_456).default(65_536),
+  ARGON2_TIME_COST: Joi.number().integer().min(2).default(3),
+  ARGON2_PARALLELISM: Joi.number().integer().min(1).max(16).default(1),
+
+  // V1.7: ProductionAdminGuard. Forced on in production via the
+  // guard's own NODE_ENV check; setting this to true also turns
+  // it on in dev/staging. Default false.
+  REQUIRE_ADMIN_FOR_REGISTRATION: Joi.boolean().default(false),
+
   // V1.5: HTTP hardening — body size + request/response timeouts.
   // Defaults match the values in src/config/configuration.ts; the
   // Joi schemas here just enforce the right type + range.

@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { PasswordHasher } from '../../../shared/domain/value-objects/password-hash';
+import { ConfigService } from '@nestjs/config';
+import { AppConfig } from '../../../config/configuration';
 
 /**
  * Argon2id password hasher.
@@ -12,7 +14,8 @@ import { PasswordHasher } from '../../../shared/domain/value-objects/password-ha
  *     production deployments should target 250–500ms per hash, which
  *     a single-threaded 64 MiB / 3-iteration argon2 verify hits on
  *     modern server hardware. Bump via env var if your hardware is
- *     slower (TODO V1.5: surface these as configurable).
+ *     slower — V1.7: `ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`,
+ *     `ARGON2_PARALLELISM` (defaults below).
  *   * timeCost: 3 iterations.
  *   * parallelism: 1 (single-threaded).
  *
@@ -24,12 +27,31 @@ import { PasswordHasher } from '../../../shared/domain/value-objects/password-ha
 @Injectable()
 export class Argon2PasswordHasher implements PasswordHasher {
   private readonly logger = new Logger(Argon2PasswordHasher.name);
-  private readonly options: argon2.Options = {
-    type: argon2.argon2id,
-    memoryCost: 65_536, // 64 MiB
-    timeCost: 3,
-    parallelism: 1,
-  };
+  private readonly options: argon2.Options;
+
+  public constructor(
+    @Inject(ConfigService) config: ConfigService<Record<string, unknown>>,
+  ) {
+    // V1.7: argon2 parameters are now env-tunable. Defaults match
+    // the pre-V1.7 hard-coded values so existing deployments are
+    // bit-for-bit unchanged. To migrate to a stronger profile in
+    // prod, bump the env vars on the running process — argon2's
+    // self-describing hash format means old hashes still verify
+    // even when the new hashes are minted with higher cost.
+    const security = config.get<AppConfig['security']>('security');
+    this.options = {
+      type: argon2.argon2id,
+      memoryCost: security?.argon2MemoryCost ?? 65_536,
+      timeCost: security?.argon2TimeCost ?? 3,
+      parallelism: security?.argon2Parallelism ?? 1,
+    };
+    if (security?.argon2MemoryCost !== undefined) {
+      this.logger.log(
+        `argon2 memoryCost=${this.options.memoryCost} ` +
+          `(env-tunable, ARGON2_MEMORY_COST)`,
+      );
+    }
+  }
 
   public async hash(plaintext: string): Promise<string> {
     return argon2.hash(plaintext, this.options);

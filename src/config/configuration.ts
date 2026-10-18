@@ -156,6 +156,29 @@ export interface AppConfig {
     /** Enable the GraphQL Playground (dev only). */
     playgroundEnabled: boolean;
   };
+  /**
+   * V1.7: security primitives (password hashing cost, etc.).
+   * env-tunable so prod can dial up the work factor without a
+   * code change. Argon2 hashes are self-describing — old hashes
+   * still verify even when the live process mints new ones with
+   * a higher cost.
+   */
+  security: {
+    /** argon2id memory cost in KiB. Default 65536 (64 MiB). */
+    argon2MemoryCost: number;
+    /** argon2id time cost (iterations). Default 3. */
+    argon2TimeCost: number;
+    /** argon2id parallelism. Default 1 (single-threaded). */
+    argon2Parallelism: number;
+    /**
+     * V1.7: when true, self-service endpoints like
+     * `POST /v1/apps` (register) require a valid admin API key
+     * in the `Authorization: Bearer *** header, regardless
+     * of NODE_ENV. Default false — but ProductionAdminGuard
+     * also forces this on when `NODE_ENV=production`.
+     */
+    requireAdminForRegistration: boolean;
+  };
 }
 
 /**
@@ -237,6 +260,19 @@ export const configuration = (): AppConfig => {
       // (20/min on login). Set RATE_LIMIT_PER_EMAIL_MAX=0 to
       // disable (only do this in tests).
       perEmailMax: Number(process.env.RATE_LIMIT_PER_EMAIL_MAX ?? 10),
+    },
+
+    // V1.7: argon2id cost factors. Defaults match the pre-V1.7
+    // hard-coded values; prod can dial up the work factor
+    // without a code change.
+    security: {
+      argon2MemoryCost: Number(process.env.ARGON2_MEMORY_COST ?? 65_536),
+      argon2TimeCost: Number(process.env.ARGON2_TIME_COST ?? 3),
+      argon2Parallelism: Number(process.env.ARGON2_PARALLELISM ?? 1),
+      // Forced on in NODE_ENV=production via ProductionAdminGuard;
+      // set to true to also force it on in dev/staging.
+      requireAdminForRegistration:
+        (process.env.REQUIRE_ADMIN_FOR_REGISTRATION ?? 'false') === 'true',
     },
 
     http: {

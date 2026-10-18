@@ -110,10 +110,7 @@ export class IssueClientCredentialsAccessTokenUseCase {
     input: IssueClientCredentialsInput,
   ): Promise<IssueClientCredentialsResult> {
     if (!input.clientId || !input.clientSecret) {
-      throw new DomainError(
-        'app.not_found',
-        'Invalid client credentials',
-      );
+      throw new DomainError('app.not_found', 'Invalid client credentials');
     }
     const ttlSeconds =
       this.configService.getOrThrow<AppConfig['jwt']['accessTokenTtl']>(
@@ -137,10 +134,7 @@ export class IssueClientCredentialsAccessTokenUseCase {
       // leaking which one was wrong (RFC 6749 §5.2).
       const app = await this.appRepo.findById(tx, input.clientId);
       if (!app || app.revokedAt !== null || !app.currentKey) {
-        throw new DomainError(
-          'app.not_found',
-          'Invalid client credentials',
-        );
+        throw new DomainError('app.not_found', 'Invalid client credentials');
       }
       // Step 3: argon2 verify. This is the only source of truth
       // for "is this plaintext the right secret" — argon2 salts
@@ -150,19 +144,13 @@ export class IssueClientCredentialsAccessTokenUseCase {
         input.clientSecret,
       );
       if (!ok) {
-        throw new DomainError(
-          'app.not_found',
-          'Invalid client credentials',
-        );
+        throw new DomainError('app.not_found', 'Invalid client credentials');
       }
       // Belt-and-suspenders: catch the key-vs-app race window where
       // the key was alive at find-time but expired by the time we
       // reached here (microseconds, but cheap).
       if (!app.currentKey.isAliveAt(this.clock.now())) {
-        throw new DomainError(
-          'app.not_found',
-          'Invalid client credentials',
-        );
+        throw new DomainError('app.not_found', 'Invalid client credentials');
       }
 
       // Step 4: resolve the org from `defaultOrgSlug`. If the slug
@@ -187,9 +175,7 @@ export class IssueClientCredentialsAccessTokenUseCase {
         .split(' ')
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-      const granted = requestedScopes.filter((s) =>
-        allowedScopes.includes(s),
-      );
+      const granted = requestedScopes.filter((s) => allowedScopes.includes(s));
       const scopeString = granted.join(' ');
 
       // Step 6: sign.

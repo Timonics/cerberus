@@ -3,6 +3,12 @@ import { AppLoggerModule } from '../common/logger/app-logger.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { SharedKernelModule } from '../shared/shared-kernel.module';
 import { RedisModule } from '../redis/redis.module';
+import { ProductionAdminGuard } from '../common/security/production-admin.guard';
+import { AdminApiKeyLookupTokenService } from '../administration/infrastructure/security/admin-api-key-lookup-token.service';
+import { AdminApiKeyHasher } from '../administration/infrastructure/security/argon2-admin-api-key.hasher';
+import { PrismaAdminApiKeyRepository } from '../administration/infrastructure/persistence/prisma-admin-api-key.repository';
+import { ADMIN_API_KEY_REPOSITORY } from '../administration/domain/ports/admin-api-key.repository.port';
+import { ADMIN_API_KEY_HASHER } from '../administration/infrastructure/security/argon2-admin-api-key.hasher';
 import { ConfigModule } from '@nestjs/config';
 import { configuration } from '../config/configuration';
 import { envValidationSchema } from '../config/env.validation';
@@ -73,6 +79,32 @@ import { AppsController } from './interfaces/http/apps.controller';
 
     // GraphQL resolver (V1.5)
     AppsGraphqlResolver,
+
+    // V1.7: production-gate for self-service endpoints. Closes
+    // the audit-flagged gap where `POST /v1/apps` was open in
+    // production. See `src/common/security/production-admin.guard.ts`.
+    //
+    // We DON'T import AdminModule here — that creates a cycle
+    // (AdminModule → IdentityModule → AppsModule). Instead, the
+    // guard depends on a small surface (the lookup-token service
+    // + the admin-key repo + the hasher) and we register those
+    // pieces directly. The `AdminApiKeyLookupTokenService` is
+    // stateless (HMAC of plaintext with the server's
+    // `lookupSecret`); the hasher is the standard argon2id; the
+    // repo is the same Prisma-backed one AdminModule uses. All
+    // three are safe to instantiate twice.
+    AdminApiKeyLookupTokenService,
+    AdminApiKeyHasher,
+    {
+      provide: ADMIN_API_KEY_HASHER,
+      useExisting: AdminApiKeyHasher,
+    },
+    PrismaAdminApiKeyRepository,
+    {
+      provide: ADMIN_API_KEY_REPOSITORY,
+      useClass: PrismaAdminApiKeyRepository,
+    },
+    ProductionAdminGuard,
 
     // Global error filter for the apps endpoints (REST context).
     {

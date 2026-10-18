@@ -109,9 +109,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
    * env vars directly via process.env (they were loaded by the
    * test harness before PublicTestModule was constructed).
    */
-  async function verifyJwt(
-    token: string,
-  ): Promise<Record<string, unknown>> {
+  async function verifyJwt(token: string): Promise<Record<string, unknown>> {
     const jwksRes = await request(app.getHttpServer()).get(
       '/.well-known/jwks.json',
     );
@@ -122,7 +120,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
       issuer: process.env.JWT_ISSUER ?? 'cerberus',
       audience: process.env.JWT_AUDIENCE_DEFAULT ?? 'cerberus-clients',
     });
-    return payload as Record<string, unknown>;
+    return payload;
   }
 
   /** Create a real organization with a unique slug. */
