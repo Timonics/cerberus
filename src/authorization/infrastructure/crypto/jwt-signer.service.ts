@@ -115,9 +115,20 @@ export class JwtSignerService implements OnModuleInit {
       cryptoKey = await this.loadKey(kid);
       this.verifyingKeys.set(kid, cryptoKey);
     }
+    // V1.7 audit fix #14: explicitly pin the algorithm to RS256.
+    // jose v5's `jwtVerify` accepts the algorithm from the token's
+    // `alg` header by default — which works in V1 because every
+    // signing key is RSA. But if a future PR ever changes the key
+    // generator to support multiple algorithms (HS256, ES256),
+    // this surface is a downgrade-attack vector: an attacker who
+    // can mint any token can claim `alg: HS256` with the public
+    // key as the HMAC secret. Locking to RS256 here makes that
+    // attack impossible regardless of what the key generator
+    // does in the future.
     const { payload } = await jwtVerify(params.token, cryptoKey, {
       issuer: params.issuer,
       audience: params.audience,
+      algorithms: ['RS256'],
     });
     return payload;
   }

@@ -100,7 +100,7 @@ export class MailSenderDispatcher implements OnModuleInit {
         text: tpl.text,
         html: tpl.html,
       });
-      this.logger.log(`Sent verification email to ${user.email.value}`);
+      this.logger.log(`Sent verification email to userId=${user.id.value}`);
     } catch (err) {
       this.logger.error(
         `Failed to send verification email for user ${event.userId}: ${String(err)}`,
@@ -139,7 +139,7 @@ export class MailSenderDispatcher implements OnModuleInit {
         text: tpl.text,
         html: tpl.html,
       });
-      this.logger.log(`Sent password-reset email to ${user.email.value}`);
+      this.logger.log(`Sent password-reset email to userId=${user.id.value}`);
     } catch (err) {
       this.logger.error(
         `Failed to send password-reset email for user ${event.userId}: ${String(err)}`,

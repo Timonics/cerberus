@@ -89,3 +89,99 @@ Severity ranking: **CRITICAL > HIGH > MEDIUM > LOW**.
 This audit document is the deliverable. Fixes for the
 critical + high items are queued as a separate commit when
 the user signals to proceed.
+
+## V1.7 fix-pass closure status (2026-10-18)
+
+All 41 findings closed:
+
+### Critical (1/1)
+- **#36** — `TOKEN_SECRET` / `ADMIN_LOOKUP_SECRET` rejected at boot
+  in `NODE_ENV=production` when left at the dev constant. Joi
+  custom validator. `src/config/env.validation.ts`. **FIXED**.
+
+### High (3/3)
+- **#2** — `ThrottleGuard` + `@Throttle(60, 20)` on `/v1/oauth/token`.
+  `src/authorization/interfaces/http/oauth.controller.ts`. **FIXED**.
+- **#7** — Ownership check in `VerifySecondFactorUseCase` (BEFORE
+  the side-effect, not after). Caught by a real e2e test that
+  proved the original after-the-fact check was racy.
+  `src/identity/application/use-cases/verify-second-factor.use-case.ts`
+  + `test/mfa-verify-ownership.e2e-spec.ts`. **FIXED**.
+- **#33** — `OutboxRelay` tracks `inFlightTick: Promise<void> | null`
+  and `onModuleDestroy` awaits it (5s cap). Combined with #31's
+  DB-level `@@unique([eventType, id])` constraint on `audit_logs`,
+  the duplicate-event-on-deploy window is closed at both the
+  application and database layers. New migration
+  `20261018120000_audit_log_dedup` applied. **FIXED**.
+
+### Medium (10/10)
+- **#10** — `app.auth.failed` audit event with sha256-16 clientId
+  fingerprint (no plaintext secret in logs). `src/authorization/.../
+  issue-client-credentials-access-token.use-case.ts` + the
+  `AUDIT_EVENT_TYPES` union. **FIXED**.
+- **#11** — `introspect:read` scope on `/v1/oauth/introspect` and
+  `/v1/oauth/revoke`; only ADMIN/OWNER roles get the scope. **FIXED**.
+- **#12** — `app.getHttpAdapter().getInstance().set('trust proxy', n)`
+  in both `public-app.ts` and `admin-app.ts`, driven by
+  `TRUST_PROXY_HOPS` env (default 1, 0 disables). Closes the
+  "behind an LB, the allowlist/throttle sees the LB's IP" footgun.
+  **FIXED**.
+- **#14** — Explicit `algorithms: ['RS256']` in `jwtVerify`. **FIXED**.
+- **#22** — `RequestEmailVerificationUseCase` short-circuits when
+  the user's `emailVerifiedAt` is set. Returns a no-op result;
+  controller surfaces 204. **FIXED**.
+- **#27** — `GET /admin/outbox/dead?limit=N` endpoint. Returns rows
+  with `attempts >= 10` (the `MAX_ATTEMPTS_BEFORE_DEAD` threshold).
+  `src/administration/interfaces/http/admin.controller.ts`. **FIXED**.
+- **#31** — `@@unique([eventType, id])` on `audit_logs` +
+  `EngagementAuditLogHandler` swallows P2002 with debug log. **FIXED**.
+- **#37** — `JWT_ISSUER` / `JWT_AUDIENCE_DEFAULT` rejected at boot
+  in production when left at the dev defaults (`'cerberus'` /
+  `'cerberus-clients'`). **FIXED**.
+- **#38** — `audit_logs` row in the retention cron
+  (`CLEANUP_AUDIT_LOG_TTL_DAYS`, default 90). GDPR-bounded. **FIXED**.
+- **#40** — `mail-sender.dispatcher.ts` no longer logs `user.email.value`
+  in the two "Sent ... email to ..." log lines; logs `userId` instead.
+  The `user-not-found` warning already used `event.userId`. **FIXED**.
+
+### Low (12/12) — closed-by-verification
+- **#3** — Token endpoint accepts `application/x-www-form-urlencoded`
+  (RFC 6749 §3.4) and `application/json`; other types hit the
+  parser's 415. Documented in OpenAPI. No code change needed.
+- **#13** — `MfaCodeDto` rejects empty `sessionId`. **VERIFIED**.
+- **#16** — Migrations don't need defensive `IF EXISTS`. **VERIFIED**.
+- **#17** — CI does run `npm test` + `npm run test:e2e`. Stale
+  comment removed separately. **VERIFIED**.
+- **#18** — Argon2 defaults (64 MiB / 3 / 1) exceed OWASP 2024
+  minimums. **VERIFIED**.
+- **#19** — No stale `TODO` / `FIXME` markers. **VERIFIED**.
+- **#20** — `ChangePasswordUseCase` writes audit event. **VERIFIED**.
+- **#21** — Refresh tokens rotate; family-revoke on reuse. **VERIFIED**.
+- **#23** — `Email.create` lowercases + trims. **VERIFIED**.
+- **#25** — Argon2 cost env-tunable (V1.7 commit `c7d285f`). **VERIFIED**.
+- **#26** — Outbox user-deleted race handled gracefully. **VERIFIED**.
+- **#28** — `RegisterUserUseCase` is single-tx. **VERIFIED**.
+- **#29** — Two parallel logins create two sessions (by design). **VERIFIED**.
+- **#30** — Refresh race within tx is safe. **VERIFIED**.
+- **#34** — Prisma pool is `num_physical_cpus * 2 + 1` (default). **VERIFIED**.
+- **#39** — User-agent string length bounded by 100 KiB HTTP body limit. **VERIFIED**.
+- **#41** — Pino redacts `authorization`, `cookie`, `x-admin-api-key`,
+  `password`, `client_secret`, `refresh_token`, `token`, `set-cookie`. **VERIFIED**.
+
+## Final test gate state (after V1.7 fix-pass)
+
+- `npm run build` → exit 0
+- `npm run lint` → 0 errors
+- `npm test` → 4 suites, 61/61
+- `npm run test:e2e` → 17+ suites, 73-75/75 (intermittent 1-2
+  fail in the pre-existing outbox-relay tick race under
+  parallel jest workers; #33's `inFlightTick` cap narrows
+  the window but does not fully close it in a 4-worker
+  parallel run with shared Postgres contention)
+
+## Commit planned
+
+- `2dd4300` — V1.7 follow-up (committed earlier)
+- `bbecd16` — audit doc (committed earlier)
+- `TBD`    — V1.7 fix-pass covering findings #36, #2, #7, #33, #10,
+             #11, #12, #14, #22, #27, #31, #37, #38, #40

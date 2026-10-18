@@ -24,6 +24,7 @@ import { AdminSearchAuditLogUseCase } from '../../application/use-cases/admin-se
 import { AdminApiKeyGuard } from '../security/admin-api-key.guard';
 import { IpAllowlistGuard } from '../security/ip-allowlist.guard';
 import { GetUserUseCase } from '../../../identity/application/use-cases/get-user.use-case';
+import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateOrganizationUseCase } from '../../../identity/application/use-cases/create-organization.use-case';
 
 interface AdminRequest extends Request {
@@ -44,6 +45,7 @@ export class AdminController {
     private readonly adminSearchAuditLogUc: AdminSearchAuditLogUseCase,
     private readonly getUserUc: GetUserUseCase,
     private readonly createOrganizationUc: CreateOrganizationUseCase,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Post('api-keys')
@@ -165,6 +167,46 @@ export class AdminController {
       id: result.organization.id.value,
       slug: result.organization.slug.value,
       name: result.organization.name,
+    };
+  }
+  // V1.7 audit fix #27: surface dead-lettered outbox events so
+  // operators can see which events have been parked after
+  // MAX_ATTEMPTS_BEFORE_DEAD (10) failed publish attempts.
+  @Get('outbox/dead')
+  public async listDeadOutboxEvents(
+    @Query('limit') limitRaw?: string,
+  ): Promise<{
+    items: ReadonlyArray<{
+      id: string;
+      eventName: string;
+      attempts: number;
+      lastError: string | null;
+      createdAt: string;
+    }>;
+    count: number;
+  }> {
+    const limit = Math.min(Math.max(Number(limitRaw ?? 50), 1), 200);
+    const items = await this.prisma.outboxEvent.findMany({
+      where: { attempts: { gte: 10 } },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+    interface DeadOutboxRow {
+      id: string;
+      eventName: string;
+      attempts: number;
+      lastError: string | null;
+      createdAt: Date;
+    }
+    return {
+      items: (items as ReadonlyArray<DeadOutboxRow>).map((row) => ({
+        id: row.id,
+        eventName: row.eventName,
+        attempts: row.attempts,
+        lastError: row.lastError ?? null,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      count: items.length,
     };
   }
 }

@@ -103,7 +103,7 @@ describe('Engagement confirm flow (integration)', () => {
     });
   });
 
-  it('email verification: re-presentation after already-verified is idempotent at the data level', async () => {
+  it('email verification: re-request after already-verified is a no-op (V1.7 audit fix #22)', async () => {
     const email = uniqueEmail('verify-idem');
     const password = 'correct horse battery staple 1!';
     const reg = await registerUc.execute({
@@ -120,20 +120,26 @@ describe('Engagement confirm flow (integration)', () => {
     }))!.emailVerifiedAt;
     expect(verifiedAt).not.toBeNull();
 
-    // A SECOND request creates a new row in email_verifications.
-    // But confirming it should ALSO work because markEmailVerified
-    // is idempotent (null→set OR set→set).
-    const secondToken = await requestEmailUc.execute({ userId: reg.userId });
-    await confirmEmailUc.execute({ token: secondToken.token });
+    // V1.7 audit fix #22: a second `requestEmailUc` call for an
+    // already-verified user is a no-op. The use case returns the
+    // empty-token sentinel ({ token: '', expiresAt: new Date(0) })
+    // and the controller surfaces 204. Pre-fix, the second call
+    // would mint a fresh token + emit a "verification requested"
+    // event, which the confirm step would then consume, creating
+    // a second `identity.email.verified` audit row.
+    const secondResult = await requestEmailUc.execute({
+      userId: reg.userId,
+    });
+    expect(secondResult.token).toBe('');
+    expect(secondResult.expiresAt.getTime()).toBe(0);
 
-    // emailVerifiedAt shouldn't have moved (same value).
+    // emailVerifiedAt shouldn't have moved (no second confirm).
     const verifiedAt2 = (await prisma.user.findUnique({
       where: { id: reg.userId },
     }))!.emailVerifiedAt;
     expect(verifiedAt2?.getTime()).toBe(verifiedAt!.getTime());
 
-    // Only ONE audit row should be written for this user —
-    // the second confirm was a no-op transition.
+    // Only ONE audit row should be written for this user.
     const audits = await prisma.auditLog.count({
       where: {
         userId: reg.userId,

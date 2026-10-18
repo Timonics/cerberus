@@ -49,6 +49,15 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OutboxRelay.name);
   private running = false;
   private pollHandle: NodeJS.Timeout | null = null;
+  // V1.7 audit fix #33: track the in-flight tick so onModuleDestroy
+  // can await it. Without this, SIGTERM mid-tick abandons the
+  // publish + processedAt update, and the next boot re-publishes
+  // the row — causing duplicate audit events (combined with
+  // #31's missing dedup constraint). With this, the relay
+  // guarantees: when onModuleDestroy resolves, every row that
+  // the relay started processing is either fully marked or its
+  // failure is recorded.
+  private inFlightTick: Promise<void> | null = null;
 
   /** Polling interval. 1s gives a sub-second worst-case latency. */
   private static readonly POLL_INTERVAL_MS = 1_000;
@@ -69,21 +78,32 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
     this.scheduleNextTick();
   }
 
-  public onModuleDestroy(): void {
+  public async onModuleDestroy(): Promise<void> {
     if (this.pollHandle) {
       clearTimeout(this.pollHandle);
       this.pollHandle = null;
+    }
+    if (this.inFlightTick) {
+      // Wait for the in-flight tick to finish. Bound at 5s so a
+      // hung publisher doesn't block the process forever.
+      await Promise.race([
+        this.inFlightTick,
+        new Promise((resolve) => setTimeout(resolve, 5_000)),
+      ]);
     }
   }
 
   private scheduleNextTick(): void {
     if (this.pollHandle) clearTimeout(this.pollHandle);
     this.pollHandle = setTimeout(() => {
-      this.tick()
+      // V1.7 audit fix #33: capture the in-flight promise so
+      // onModuleDestroy can await it.
+      this.inFlightTick = this.tick()
         .catch((err) => {
           this.logger.error(`OutboxRelay tick failed: ${String(err)}`);
         })
         .finally(() => {
+          this.inFlightTick = null;
           // Re-arm regardless of success. We DO NOT check
           // `this.running` here — it's set back to false in the
           // tick() finally block, and the previous (buggy) check

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   DomainError,
   TRANSACTION_RUNNER,
@@ -54,6 +54,7 @@ export interface VerifySecondFactorResult {
  */
 @Injectable()
 export class VerifySecondFactorUseCase {
+  private readonly logger = new Logger(VerifySecondFactorUseCase.name);
   public constructor(
     @Inject(TRANSACTION_RUNNER) private readonly txRunner: TransactionRunner,
     @Inject(MFA_SECRET_REPOSITORY)
@@ -88,6 +89,24 @@ export class VerifySecondFactorUseCase {
           this.totp.verifyTotp(s, c),
         );
         if (ok) {
+          // V1.7 audit fix #7: ownership check BEFORE the side-effect
+          // (markMfaVerified). The caller's `userId` (from the JWT
+          // principal at the controller) MUST own the session they're
+          // trying to mark MFA-verified. Without this check, user A
+          // with MFA enabled could mark user B's session as
+          // MFA-verified, then chain with session-hijacking to bypass
+          // MFA entirely. Same check applied to the recovery-code
+          // branch below.
+          const session = await this.sessionRepo.findById(tx, sessionId);
+          if (!session || session.userId.value !== userId.value) {
+            this.logger.warn(
+              `mfa-verify ownership mismatch: caller=${userId.value} session=${sessionId.value} actual=${session?.userId.value ?? 'NOT_FOUND'}`,
+            );
+            throw new DomainError(
+              'authentication.session.not_found',
+              'Session not found or revoked',
+            );
+          }
           // V1.5 (audit C-4): mark the session as MFA-verified so the
           // OAuth password / refresh grants will mint an access token.
           // We look up by sessionId first; if the session is already
@@ -123,6 +142,17 @@ export class VerifySecondFactorUseCase {
           now: new Date(),
         });
         if (result.matched) {
+          // V1.7 audit fix #7: ownership check BEFORE the side-effects.
+          const session = await this.sessionRepo.findById(tx, sessionId);
+          if (!session || session.userId.value !== userId.value) {
+            this.logger.warn(
+              `mfa-verify ownership mismatch (recovery): caller=${userId.value} session=${sessionId.value} actual=${session?.userId.value ?? 'NOT_FOUND'}`,
+            );
+            throw new DomainError(
+              'authentication.session.not_found',
+              'Session not found or revoked',
+            );
+          }
           await this.mfaRepo.save(tx, result.updated);
           // V1.5 (audit C-4): same — mark session verified.
           const verified = await this.sessionRepo.markMfaVerified(

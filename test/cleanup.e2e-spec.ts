@@ -95,6 +95,7 @@ describe('Cleanup cron (integration)', () => {
       signingKeyTtlDays: 7,
       recoveryCodeTtlDays: 90,
       outboxTtlDays: 7,
+      auditLogTtlDays: 90,
     });
 
     expect(
@@ -143,6 +144,7 @@ describe('Cleanup cron (integration)', () => {
       signingKeyTtlDays: 7,
       recoveryCodeTtlDays: 90,
       outboxTtlDays: 7,
+      auditLogTtlDays: 90,
     });
 
     expect(
@@ -178,6 +180,7 @@ describe('Cleanup cron (integration)', () => {
       signingKeyTtlDays: 7,
       recoveryCodeTtlDays: 90,
       outboxTtlDays: 7,
+      auditLogTtlDays: 90,
     });
 
     expect(
@@ -216,6 +219,7 @@ describe('Cleanup cron (integration)', () => {
       signingKeyTtlDays: 7,
       recoveryCodeTtlDays: 90,
       outboxTtlDays: 7,
+      auditLogTtlDays: 90,
     });
 
     expect(
@@ -254,6 +258,7 @@ describe('Cleanup cron (integration)', () => {
       signingKeyTtlDays: 7,
       recoveryCodeTtlDays: 90,
       outboxTtlDays: 7,
+      auditLogTtlDays: 90,
     });
 
     expect(
@@ -272,6 +277,7 @@ describe('Cleanup cron (integration)', () => {
       signingKeyTtlDays: 7,
       recoveryCodeTtlDays: 90,
       outboxTtlDays: 7,
+      auditLogTtlDays: 90,
     });
 
     // Every table key is present, even when count is zero.
@@ -279,6 +285,8 @@ describe('Cleanup cron (integration)', () => {
       [
         'admin_api_keys',
         'app_api_keys',
+        // V1.7 audit fix #38: audit_logs is now in the cleanup map.
+        'audit_logs',
         'email_verifications',
         'invitations',
         'outbox_events',

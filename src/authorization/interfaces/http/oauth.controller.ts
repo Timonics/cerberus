@@ -11,6 +11,9 @@ import {
 } from '@nestjs/common';
 import { Public } from '../security/public.decorator';
 import { JwtAuthGuard } from '../security/jwt-auth.guard';
+import { Throttle, ThrottleGuard } from '../../../common/throttle.guard';
+import { Scopes } from '../security/scopes.decorator';
+import { ScopesGuard } from '../security/scopes.guard';
 import { Response } from 'express';
 import { GetJwksUseCase } from '../../application/use-cases/get-jwks.use-case';
 import { IntrospectTokenUseCase } from '../../application/use-cases/introspect-token.use-case';
@@ -86,6 +89,16 @@ export class OAuthController {
   }
 
   @Public()
+  // V1.7 audit fix #2: the OAuth password grant bypasses the
+  // /v1/auth/login ThrottleGuard (which gates the LoginUseCase
+  // directly). An attacker can keep retrying credentials via
+  // this endpoint and dodge the in-DB lockout + per-IP rate limit.
+  // Apply the same 20/min/IP cap here. The client_credentials
+  // and refresh_token branches are also under this guard — same
+  // throttle for all grants (a per-grant key would be more
+  // sophisticated; the V2 followup is `Throttle per (grant_type, ip)`).
+  @Throttle(60, 20)
+  @UseGuards(ThrottleGuard)
   @Post('token')
   @HttpCode(HttpStatus.OK)
   public async token(
@@ -215,7 +228,14 @@ export class OAuthController {
   // here — V2 will add `introspect:read` scope — because V1 resource
   // servers only have full access tokens. Requiring ANY valid token is
   // still strictly better than no auth at all.
-  @UseGuards(JwtAuthGuard)
+  // V1.7 audit fix #11: gate on `introspect:read` scope. Prior to
+  // this, /v1/oauth/introspect was guarded only by JwtAuthGuard,
+  // meaning any valid JWT could enumerate all live tokens. Now
+  // only ADMIN/OWNER-scoped tokens (which have the
+  // `introspect:read` scope) can introspect. MEMBER tokens get
+  // 401 insufficient_scope.
+  @UseGuards(JwtAuthGuard, ScopesGuard)
+  @Scopes('introspect:read')
   @Post('introspect')
   @HttpCode(HttpStatus.OK)
   public async introspect(@Body() body: TokenInspectDto) {
@@ -225,8 +245,12 @@ export class OAuthController {
     });
   }
 
-  // V1.5 (audit C3): revoke also requires Bearer auth.
-  @UseGuards(JwtAuthGuard)
+  // V1.5 (audit C3): revoke also requires Bearer auth. V1.7
+  // (audit #11): also requires `introspect:read` scope (revoke
+  // and introspect are paired — a token oracle that can mint
+  // should be able to revoke).
+  @UseGuards(JwtAuthGuard, ScopesGuard)
+  @Scopes('introspect:read')
   @Post('revoke')
   @HttpCode(HttpStatus.OK)
   public async revoke(@Body() body: TokenInspectDto): Promise<void> {

@@ -201,7 +201,16 @@ export class IssueAccessTokenUseCase {
       membership.role.equals(Role.create('ADMIN')) ||
       membership.role.equals(Role.create('OWNER'))
     ) {
-      return [...base, Scope.create('auth:write'), Scope.create('org:admin')];
+      // V1.7 audit fix #11: ADMIN/OWNER can introspect arbitrary
+      // tokens. MEMBER cannot — the prior audit noted that
+      // /v1/oauth/introspect was guarded only by JwtAuthGuard,
+      // letting any valid JWT enumerate all live tokens.
+      return [
+        ...base,
+        Scope.create('auth:write'),
+        Scope.create('org:admin'),
+        Scope.create('introspect:read'),
+      ];
     }
     return base;
   }

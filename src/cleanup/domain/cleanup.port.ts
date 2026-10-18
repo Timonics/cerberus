@@ -33,6 +33,10 @@ export interface CleanupTtls {
   signingKeyTtlDays: number;
   recoveryCodeTtlDays: number;
   outboxTtlDays: number;
+  // V1.7 audit fix #38: GDPR-bounded retention for audit_logs.
+  // IP addresses are PII; default 90 days matches common SOC2 +
+  // ISO 27001 event-log retention windows. Set to 0 to disable.
+  auditLogTtlDays: number;
 }
 
 export const CLEANUP_REPOSITORY = Symbol('CleanupRepository');

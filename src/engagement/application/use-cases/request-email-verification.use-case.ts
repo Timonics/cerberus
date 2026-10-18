@@ -17,6 +17,10 @@ import {
   EMAIL_VERIFICATION_REPOSITORY,
   EmailVerificationRepository,
 } from '../../domain/ports/email-verification.repository.port';
+import {
+  USER_REPOSITORY,
+  UserRepository,
+} from '../../../identity/domain/ports/user.repository.port';
 import { Sha256TokenService } from '../../infrastructure/security/sha256-token.service';
 
 export interface RequestEmailVerificationInput {
@@ -53,6 +57,8 @@ export class RequestEmailVerificationUseCase {
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
     @Inject(EMAIL_VERIFICATION_REPOSITORY)
     private readonly repo: EmailVerificationRepository,
+    @Inject(USER_REPOSITORY)
+    private readonly userRepo: UserRepository,
     private readonly tokenService: Sha256TokenService,
   ) {}
 
@@ -60,6 +66,22 @@ export class RequestEmailVerificationUseCase {
     input: RequestEmailVerificationInput,
   ): Promise<RequestEmailVerificationResult> {
     const userId = UserId.create(input.userId);
+
+    // V1.7 audit fix #22: short-circuit if the user's email is
+    // already verified. Pre-fix the use case generated a token +
+    // emitted a "verification requested" event every time the
+    // endpoint was hit, which let any caller spam the mail
+    // pipeline for an already-verified user. The controller
+    // surfaces 204 (no-op) in that case.
+    const alreadyVerified = await this.txRunner.run<boolean>(async (tx: Tx) => {
+      const user = await this.userRepo.findById(tx, userId);
+      return (
+        user?.emailVerifiedAt !== null && user?.emailVerifiedAt !== undefined
+      );
+    });
+    if (alreadyVerified) {
+      return { token: '', expiresAt: new Date(0) };
+    }
 
     const plaintext = this.tokenService.generatePlaintext();
     const tokenHash = this.tokenService.hash(plaintext);

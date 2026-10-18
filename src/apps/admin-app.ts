@@ -3,7 +3,12 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { json, urlencoded } from 'express';
-import type { Request, Response, NextFunction } from 'express';
+import type {
+  Request,
+  Response,
+  NextFunction,
+  Application as ExpressApplication,
+} from 'express';
 import type { Server as HttpServer } from 'node:http';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { ConfigService } from '@nestjs/config';
@@ -43,6 +48,15 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
   const httpCfg = app.get(ConfigService).getOrThrow<AppConfig['http']>('http');
   app.use(json({ limit: httpCfg.bodyLimitBytes }));
   app.use(urlencoded({ limit: httpCfg.bodyLimitBytes, extended: true }));
+  // V1.7 audit fix #12: same trust-proxy handling as the public
+  // app. The IpAllowlistGuard on /admin/* reads `req.ip`, which
+  // would be the LB's IP without this — denying every legitimate
+  // request.
+  // V1.7 audit fix #12
+  (app.getHttpAdapter().getInstance() as ExpressApplication).set(
+    'trust proxy',
+    httpCfg.trustProxyHops,
+  );
   const server = app.getHttpServer() as HttpServer;
   if (server && typeof server.setTimeout === 'function') {
     server.setTimeout(httpCfg.requestTimeoutMs);

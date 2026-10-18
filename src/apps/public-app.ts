@@ -4,7 +4,12 @@ import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { RequestMethod } from '@nestjs/common';
 import { json, urlencoded } from 'express';
-import type { Request, Response, NextFunction } from 'express';
+import type {
+  Request,
+  Response,
+  NextFunction,
+  Application as ExpressApplication,
+} from 'express';
 import type { Server as HttpServer } from 'node:http';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { ConfigService } from '@nestjs/config';
@@ -38,6 +43,20 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
   // automatically when the limit is exceeded.
   app.use(json({ limit: httpCfg.bodyLimitBytes }));
   app.use(urlencoded({ limit: httpCfg.bodyLimitBytes, extended: true }));
+  // V1.7 audit fix #12: trust the X-Forwarded-* headers from a
+  // known number of upstream proxies. Without this, `req.ip` (used
+  // by the ThrottleGuard, the LoginUseCase lockout key, and the
+  // IpAllowlistGuard for the admin listener) is the direct socket
+  // address — which behind an L7 load balancer is always the LB's
+  // IP. Default 1 hop (works for AWS ALB / nginx / Cloudflare).
+  // Set TRUST_PROXY_HOPS=0 to disable (direct connections only).
+  // V1.7 audit fix #12: INestApplication doesn't expose `set()`,
+  // but the underlying Express instance does. We access it via
+  // getHttpAdapter().getInstance() (Nest 9+ API).
+  (app.getHttpAdapter().getInstance() as ExpressApplication).set(
+    'trust proxy',
+    httpCfg.trustProxyHops,
+  );
   // Hard timeouts on the request and response phases. Without
   // these, a malicious client can hold a connection open
   // indefinitely, exhausting the server's connection pool.

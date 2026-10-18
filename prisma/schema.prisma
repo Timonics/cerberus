@@ -355,6 +355,13 @@ model AuditLog {
   @@index([userId])
   @@index([eventType])
   @@index([createdAt])
+  // V1.7 audit fix #31: dedup-by-(eventType, id). The outbox relay
+  // can re-publish a row if the process crashes between bus.publish
+  // and the processedAt update (see #33). A DB-level unique
+  // constraint makes the dedup atomic — the second insert fails
+  // with a P2002 error which the audit log handler catches and
+  // logs at debug.
+  @@unique([eventType, id])
   @@map("audit_logs")
 }
 

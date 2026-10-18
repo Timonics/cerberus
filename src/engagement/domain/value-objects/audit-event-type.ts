@@ -44,6 +44,10 @@ export const AUDIT_EVENT_TYPES = [
   // the audit row is the App UUID (free-form text column — apps
   // don't have a User UUID).
   'apps.token.issued',
+  // V1.7 audit fix #10: client_credentials grant failure. Logged
+  // for security audit trails so operators can replay-attack
+  // detection. Does NOT include the plaintext client_secret.
+  'app.auth.failed',
   // Authorization
   'authorization.token.minted',
   'authorization.token.revoked',

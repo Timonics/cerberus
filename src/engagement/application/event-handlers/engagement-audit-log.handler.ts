@@ -87,8 +87,18 @@ export class EngagementAuditLogHandler implements OnModuleInit {
     try {
       await this.recordAuditEventUc.execute(input);
     } catch (err) {
+      // V1.7 audit fix #31: P2002 = unique constraint violation.
+      // Means we already wrote this row — the outbox relay re-
+      // published a previously-processed event. Safe to ignore.
+      const message = err instanceof Error ? err.message : String(err);
+      if (/P2002|Unique constraint/i.test(message)) {
+        this.logger.debug(
+          `audit-log dedup: ${input.eventType} already recorded`,
+        );
+        return;
+      }
       this.logger.error(
-        `Failed to record audit event [${input.eventType}] for user ${input.userId}: ${String(err)}`,
+        `Failed to record audit event [${input.eventType}] for user ${input.userId}: ${message}`,
       );
     }
   }

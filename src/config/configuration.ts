@@ -118,6 +118,15 @@ export interface AppConfig {
      * longer than this, the response is closed.
      */
     responseTimeoutMs: number;
+    /**
+     * V1.7 audit fix #12: number of trusted reverse-proxy hops
+     * ahead of this process. Express's `app.set('trust proxy', n)`
+     * uses this to populate `req.ip` from the X-Forwarded-For
+     * header instead of the socket address. Default 1 (works for
+     * AWS ALB / nginx / Cloudflare). Set to 0 to disable (direct
+     * connections only).
+     */
+    trustProxyHops: number;
   };
 
   /**
@@ -148,6 +157,12 @@ export interface AppConfig {
     recoveryCodeTtlDays: number;
     /** Outbox events: delete when `processedAt < now() - ttl`. */
     outboxTtlDays: number;
+    /**
+     * V1.7 audit fix #38: audit_logs retention. IP addresses are
+     * PII under GDPR; default 90 days matches common SOC2 + ISO
+     * 27001 event-log retention windows. Set to 0 to disable.
+     */
+    auditLogTtlDays: number;
   };
 
   graphql: {
@@ -283,6 +298,8 @@ export const configuration = (): AppConfig => {
       // 30s response timeout — handlers that take longer than this
       // are pathological and should fail loud, not hang.
       responseTimeoutMs: Number(process.env.HTTP_RESPONSE_TIMEOUT_MS ?? 30_000),
+      // V1.7 audit fix #12
+      trustProxyHops: Number(process.env.TRUST_PROXY_HOPS ?? 1),
     },
 
     cleanup: {
@@ -307,6 +324,8 @@ export const configuration = (): AppConfig => {
         process.env.CLEANUP_RECOVERY_CODE_TTL_DAYS ?? 90,
       ),
       outboxTtlDays: Number(process.env.CLEANUP_OUTBOX_TTL_DAYS ?? 7),
+      // V1.7 audit fix #38
+      auditLogTtlDays: Number(process.env.CLEANUP_AUDIT_LOG_TTL_DAYS ?? 90),
     },
 
     graphql: {

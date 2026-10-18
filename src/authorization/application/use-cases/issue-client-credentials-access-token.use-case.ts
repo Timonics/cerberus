@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import {
   CLOCK,
@@ -107,6 +108,40 @@ export class IssueClientCredentialsAccessTokenUseCase {
   ) {}
 
   public async execute(
+    input: IssueClientCredentialsInput,
+  ): Promise<IssueClientCredentialsResult> {
+    // V1.7 audit fix #10: every failed client_credentials attempt
+    // is now audited. The success path already writes
+    // `apps.token.issued` further down. We deliberately do NOT
+    // log the plaintext client_secret — only the (synthetic)
+    // sha-256-16 fingerprint of the presented client_id, which
+    // gives security a stable correlation handle across rotation
+    // without leaking PII or the secret itself.
+    try {
+      return await this.executeInternal(input);
+    } catch (err) {
+      if (err instanceof DomainError && err.code === 'app.auth.failed') {
+        await this.recordAuditEventUc.execute({
+          userId: null,
+          eventType: 'app.auth.failed',
+          payload: {
+            clientIdFingerprint: input.clientId
+              ? createHash('sha256')
+                  .update(input.clientId)
+                  .digest('hex')
+                  .slice(0, 16)
+              : null,
+            reason: err.message,
+          },
+          ipAddress: null,
+          userAgent: null,
+        });
+      }
+      throw err;
+    }
+  }
+
+  private async executeInternal(
     input: IssueClientCredentialsInput,
   ): Promise<IssueClientCredentialsResult> {
     if (!input.clientId || !input.clientSecret) {

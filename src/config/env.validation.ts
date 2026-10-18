@@ -25,15 +25,70 @@ export const envValidationSchema = Joi.object({
   // --------------------------------------------------------------------
   // JWT
   // --------------------------------------------------------------------
-  // V1.5: HMAC secret for email-verification & password-reset tokens.
-  // Must be at least 32 chars in production (the dev default works
-  // for local dev so the workflow doesn't require extra setup; in
-  // production deploys this MUST be set explicitly).
+  // V1.7 audit fix #36: HMAC secret for email-verification &
+  // password-reset tokens. Default is a known dev-only constant
+  // (32 chars, satisfies the min). The startup-check below REJECTS
+  // this default when NODE_ENV=production. Net result: dev workflow
+  // still works without extra setup; production deploys fail at
+  // boot if the operator forgot to override.
   TOKEN_SECRET: Joi.string()
     .min(32)
-    .default('dev-only-insecure-default-please-override-32chars'),
-  JWT_ISSUER: Joi.string().default('cerberus'),
-  JWT_AUDIENCE_DEFAULT: Joi.string().default('cerberus-clients'),
+    .default('dev-only-insecure-default-please-override-32chars')
+    .custom((value, helpers) => {
+      if (
+        process.env['NODE_ENV'] === 'production' &&
+        value === 'dev-only-insecure-default-please-override-32chars'
+      ) {
+        return helpers.error('any.invalid', {
+          message:
+            'TOKEN_SECRET must be set to a real 32+ char value in production (not the dev default). Generate with: openssl rand -base64 48',
+        });
+      }
+      // Joi's .custom() infers the callback value as `any`; the
+      // return is forwarded into the validated value, which is
+      // always a string here.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return value;
+    }),
+  // V1.7 audit fix #37: the dev default for JWT_ISSUER + the
+  // audience is a predictable string. In production, an operator
+  // who doesn't override it lets every service that knows the
+  // default guess the `iss` claim. (Not a direct bypass — the
+  // signing key is the real secret — but isop-invariant: the
+  // operator should pick their own.)
+  JWT_ISSUER: Joi.string()
+    .default('cerberus')
+    .custom((value, helpers) => {
+      if (process.env['NODE_ENV'] === 'production' && value === 'cerberus') {
+        return helpers.error('any.invalid', {
+          message:
+            'JWT_ISSUER must be set to a real value in production (not the dev default "cerberus")',
+        });
+      }
+      // Joi's .custom() infers the callback value as `any`; the
+      // return is forwarded into the validated value, which is
+      // always a string here.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return value;
+    }),
+  JWT_AUDIENCE_DEFAULT: Joi.string()
+    .default('cerberus-clients')
+    .custom((value, helpers) => {
+      if (
+        process.env['NODE_ENV'] === 'production' &&
+        value === 'cerberus-clients'
+      ) {
+        return helpers.error('any.invalid', {
+          message:
+            'JWT_AUDIENCE_DEFAULT must be set to a real value in production (not the dev default "cerberus-clients")',
+        });
+      }
+      // Joi's .custom() infers the callback value as `any`; the
+      // return is forwarded into the validated value, which is
+      // always a string here.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return value;
+    }),
   ACCESS_TOKEN_TTL: Joi.number().integer().positive().default(900),
   REFRESH_TOKEN_TTL: Joi.number().integer().positive().default(2_592_000),
 
@@ -52,14 +107,29 @@ export const envValidationSchema = Joi.object({
   // --------------------------------------------------------------------
   ADMIN_API_KEY_HASH: Joi.string().allow('').default(''),
   /**
-   * V1.5: secret used to derive HMAC-based lookup tokens for admin keys.
-   * Must be at least 32 chars in production (per the regex below). Dev
-   * allows the insecure default so the dev workflow doesn't require
-   * extra setup; production deploys fail if this is left at default.
+   * V1.7 audit fix #36: secret used to derive HMAC-based lookup
+   * tokens for admin keys. Same pattern as TOKEN_SECRET above
+   * (dev default, production-rejected at boot).
    */
   ADMIN_LOOKUP_SECRET: Joi.string()
     .min(32)
-    .default('dev-only-insecure-default-please-override-32chars'),
+    .default('dev-only-insecure-default-please-override-32chars')
+    .custom((value, helpers) => {
+      if (
+        process.env['NODE_ENV'] === 'production' &&
+        value === 'dev-only-insecure-default-please-override-32chars'
+      ) {
+        return helpers.error('any.invalid', {
+          message:
+            'ADMIN_LOOKUP_SECRET must be set to a real 32+ char value in production (not the dev default). Generate with: openssl rand -base64 48',
+        });
+      }
+      // Joi's .custom() infers the callback value as `any`; the
+      // return is forwarded into the validated value, which is
+      // always a string here.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return value;
+    }),
   ADMIN_IP_ALLOWLIST: Joi.string().allow('').default(''),
 
   // --------------------------------------------------------------------
@@ -118,6 +188,8 @@ export const envValidationSchema = Joi.object({
     .min(1000)
     .max(10 * 60 * 1000) // 10min ceiling
     .default(30_000), // 30s
+  // V1.7 audit fix #12
+  TRUST_PROXY_HOPS: Joi.number().integer().min(0).max(32).default(1),
 
   GRAPHQL_INTROSPECTION: Joi.boolean().default(true),
   GRAPHQL_PLAYGROUND: Joi.boolean().default(true),
@@ -162,6 +234,12 @@ export const envValidationSchema = Joi.object({
     .max(3650)
     .default(90),
   CLEANUP_OUTBOX_TTL_DAYS: Joi.number().integer().min(0).max(3650).default(7),
+  // V1.7 audit fix #38: audit_logs retention. 0 = disabled.
+  CLEANUP_AUDIT_LOG_TTL_DAYS: Joi.number()
+    .integer()
+    .min(0)
+    .max(3650)
+    .default(90),
 });
 
 /**

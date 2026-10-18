@@ -145,6 +145,20 @@ export class PrismaCleanupRepository extends CleanupRepository {
       }),
     );
 
+    // V1.7 audit fix #38: GDPR-bounded retention for audit_logs.
+    // IP addresses are PII; the retention policy is documented in
+    // the env schema (CLEANUP_AUDIT_LOG_TTL_DAYS, default 90).
+    // Disabled by setting the env var to 0.
+    deleted.audit_logs = await this.tryDelete(() =>
+      client.auditLog.deleteMany({
+        where: {
+          createdAt: {
+            lt: new Date(Date.now() - ttls.auditLogTtlDays * 86_400_000),
+          },
+        },
+      }),
+    );
+
     return { deleted, durationMs: Date.now() - start };
   }
 
