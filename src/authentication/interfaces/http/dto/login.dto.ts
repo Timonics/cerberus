@@ -23,4 +23,17 @@ export class LoginDto {
   @IsString()
   @Length(1, 1024)
   public userAgent?: string;
+
+  /**
+   * Optional inline second factor (2026-10-19 audit fix C1). When the
+   * user has MFA enabled and supplies a valid 6-digit TOTP code here,
+   * the login completes in one round-trip with the normal token
+   * response. Without it — or with an invalid code — the response is
+   * `{ mfaRequired: true, mfaToken, sessionId }` and no tokens are
+   * issued until POST /v1/identity/mfa/verify completes.
+   */
+  @IsOptional()
+  @IsString()
+  @Length(6, 6, { message: 'mfaCode must be a 6-digit TOTP code' })
+  public mfaCode?: string;
 }

@@ -36,6 +36,11 @@ export type DomainErrorCode =
   | 'authentication.rate_limited'
   | 'authentication.token.missing'
   | 'authentication.app_membership_required'
+  // 2026-10-19 audit fix C1: refresh attempted against a session whose
+  // MFA verification is still pending. Mapped to 401 by
+  // DomainErrorFilter (same class as invalid_credentials — the caller
+  // holds a token but has not completed the second factor).
+  | 'authentication.mfa.required'
   // Authorization
   | 'authorization.role.not_found'
   | 'authorization.token.invalid'
@@ -61,6 +66,9 @@ export type DomainErrorCode =
   | 'admin.audit.search.out_of_range'
   | 'admin.audit.search.invalid_range'
   | 'admin.user.mfa_not_enabled'
+  // Audit 2026-10-19 (admin LOW): revoke would remove the last ACTIVE
+  // admin key. Mapped to 409 by DomainErrorFilter.
+  | 'admin.key.last_active'
   // Apps (per-app integration credentials)
   | 'app.not_found'
   | 'app.revoked'
@@ -80,6 +88,18 @@ export type DomainErrorCode =
   // "OAuth2 client_credentials grant was rejected at the token
   // endpoint" without parsing the message.
   | 'app.auth.failed'
+  // V1.7 (audit H-3 + app-credentials oracle): unknown app / revoked
+  // app / missing / revoked / expired key / wrong secret all map to
+  // this ONE code from VerifyAppApiKeyUseCase — the distinct codes
+  // above remain for read-side paths that already know the app
+  // exists. Mapped to 401 by DomainErrorFilter (credential failure,
+  // same class as invalid_credentials); HTTP callers that need the
+  // uniform body rethrow it themselves.
+  | 'app.credentials.invalid'
+  // V1.7 (audit H-3): registration requested a scope outside the
+  // server-side app-scope registry. Mapped to 400 by
+  // DomainErrorFilter (`.invalid` suffix).
+  | 'app.scope.invalid'
   // Generic
   | 'domain.invariant_violation'
   | 'domain.illegal_state';

@@ -1,11 +1,15 @@
 # =============================================================================
-# Cerberus — local infrastructure
+# Cerberus — local infrastructure  (DEV-ONLY STACK — do not deploy as-is)
 # =============================================================================
 # Spin up Postgres, Redis, and Mailpit (dev SMTP) for local development.
 #
 #   docker compose up -d
 #   npm run prisma:migrate
 #   npm run start:dev
+#
+# The Postgres and Redis ports are bound to 127.0.0.1 ONLY — this compose
+# file ships dev credentials (POSTGRES_PASSWORD defaults to "cerberus",
+# Redis has no auth) and must never be exposed on a network interface.
 # =============================================================================
 
 services:
@@ -18,7 +22,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cerberus}
       POSTGRES_DB: ${POSTGRES_DB:-cerberus}
     ports:
-      - "${POSTGRES_PORT:-5434}:5432"
+      # Loopback-only bind: dev credentials must not be reachable off-host.
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
     volumes:
           - postgres-data:/var/lib/postgresql/data
           - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
@@ -36,7 +41,8 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_PORT:-6384}:6379"
+      # Loopback-only bind: dev Redis has NO authentication.
+      - "127.0.0.1:${REDIS_PORT:-6384}:6379"
     volumes:
       - redis-data:/data
     healthcheck:

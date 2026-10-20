@@ -22,6 +22,7 @@ import {
   EmailVerificationRepository,
 } from '../../domain/ports/email-verification.repository.port';
 import { Sha256TokenService } from '../../infrastructure/security/sha256-token.service';
+import { EmailAddressVerified } from '../../domain/events/engagement.events';
 import { RecordAuditEventUseCase } from './record-audit-event.use-case';
 
 export interface ConfirmEmailVerificationInput {
@@ -95,6 +96,17 @@ export class ConfirmEmailVerificationUseCase {
     // re-presenting a valid token after the email is already
     // verified should NOT double-fire the audit event.
     if (!result.wasAlreadyVerified) {
+      // Publish the first-verification domain event so the Identity
+      // context can run the email-domain org join NOW (post-proof)
+      // rather than at registration (2026-10-19 audit MEDIUM).
+      await this.eventBus.publish(
+        new EmailAddressVerified(
+          this.idGenerator.generate(),
+          this.clock.now(),
+          result.user.id.value,
+          result.user.email.value,
+        ),
+      );
       await this.recordAuditEventUc.execute({
         userId: result.user.id.value,
         eventType: 'identity.email.verified',

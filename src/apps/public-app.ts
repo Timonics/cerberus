@@ -45,11 +45,13 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
   app.use(urlencoded({ limit: httpCfg.bodyLimitBytes, extended: true }));
   // V1.7 audit fix #12: trust the X-Forwarded-* headers from a
   // known number of upstream proxies. Without this, `req.ip` (used
-  // by the ThrottleGuard, the LoginUseCase lockout key, and the
-  // IpAllowlistGuard for the admin listener) is the direct socket
-  // address — which behind an L7 load balancer is always the LB's
-  // IP. Default 1 hop (works for AWS ALB / nginx / Cloudflare).
-  // Set TRUST_PROXY_HOPS=0 to disable (direct connections only).
+  // by the ThrottleGuard and the LoginUseCase lockout key) is the
+  // direct socket address — which behind an L7 load balancer is
+  // always the LB's IP. Default 1 hop (works for AWS ALB / nginx /
+  // Cloudflare). Set TRUST_PROXY_HOPS=0 to disable (direct
+  // connections only). PUBLIC listener only — the admin listener
+  // reads ADMIN_TRUST_PROXY_HOPS (default 0) in admin-app.ts
+  // (audit 2026-10-19 H-11).
   // V1.7 audit fix #12: INestApplication doesn't expose `set()`,
   // but the underlying Express instance does. We access it via
   // getHttpAdapter().getInstance() (Nest 9+ API).
@@ -80,24 +82,21 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
 
   // helmet applies strict defaults (CSP, X-Frame-Options, etc.) that
   // block Scalar's inline scripts and CDN-fetched assets at /api-docs.
-  // Apply helmet only to paths that are NOT the API docs — every other
-  // route (REST + GraphQL + JWKS) keeps the security headers. We also
-  // explicitly remove any CSP-related headers that may have leaked from
-  // earlier middleware, since browser cache can pin a stale response.
+  // Audit 2026-10-19: /api-docs no longer bypasses helmet entirely —
+  // it gets helmet with ONLY CSP + COEP disabled (what Scalar actually
+  // needs); every other route keeps the strict defaults.
   const apiDocsPathPrefix = '/api-docs';
   const isApiDocsPath = (path: string): boolean =>
     path === apiDocsPathPrefix || path.startsWith(`${apiDocsPathPrefix}/`);
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    if (isApiDocsPath(req.path)) {
-      res.removeHeader('Content-Security-Policy');
-      res.removeHeader('Content-Security-Policy-Report-Only');
-      res.removeHeader('Cross-Origin-Embedder-Policy');
-      res.removeHeader('Cross-Origin-Opener-Policy');
-      res.removeHeader('Cross-Origin-Resource-Policy');
-      return next();
-    }
-    return helmet()(req, res, next);
+  const relaxedHelmet = helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
   });
+  app.use((req: Request, res: Response, next: NextFunction) =>
+    isApiDocsPath(req.path)
+      ? relaxedHelmet(req, res, next)
+      : helmet()(req, res, next),
+  );
   app.enableCors({ origin: false });
 
   app.useGlobalPipes(

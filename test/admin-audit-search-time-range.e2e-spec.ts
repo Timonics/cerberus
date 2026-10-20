@@ -114,4 +114,69 @@ describe('Admin audit search — from/to time range (integration)', () => {
 
     void recordAudit;
   });
+
+  it('applies offset as SQL SKIP (paginates)', async () => {
+    // Seed 5 rows at distinct timestamps. They must sort STRICTLY
+    // AHEAD of every other row for this userId — including the
+    // `admin.audit.searched` rows each searchUc.execute() writes with
+    // createdAt = now. Seeding at past timestamps lets those
+    // interleaved rows into the first page between the two page
+    // requests and shifts the window (overlap). Future timestamps
+    // keep the seeded rows pinned to the top of the desc ordering.
+    const base = Date.now() + 60_000;
+    for (let i = 0; i < 5; i++) {
+      await prisma.auditLog.create({
+        data: {
+          id: randomUUID(),
+          userId,
+          eventType: 'authentication.login.succeeded',
+          payload: { test: true, seq: i },
+          createdAt: new Date(base + i * 60_000),
+        },
+      });
+    }
+    const page1 = await searchUc.execute({ userId, limit: 2, offset: 0 });
+    const page2 = await searchUc.execute({ userId, limit: 2, offset: 2 });
+    expect(page1.entries.length).toBe(2);
+    expect(page2.entries.length).toBe(2);
+    // No overlap between pages.
+    const ids1 = new Set(page1.entries.map((e) => e.id));
+    for (const e of page2.entries) {
+      expect(ids1.has(e.id)).toBe(false);
+    }
+  });
+
+  it('rejects an inverted from/to range (400-class domain error)', async () => {
+    await expect(
+      searchUc.execute({
+        userId,
+        from: new Date('2026-05-01T00:00:00Z'),
+        to: new Date('2026-01-01T00:00:00Z'),
+        limit: 10,
+      }),
+    ).rejects.toMatchObject({
+      code: 'admin.audit.search.invalid_range',
+    });
+  });
+
+  it('records callerKeyId on the admin.audit.searched row', async () => {
+    const callerKeyId = randomUUID();
+    await searchUc.execute({
+      userId,
+      limit: 5,
+      callerUserId: null,
+      callerKeyId,
+    });
+    const searched = await prisma.auditLog.findFirst({
+      where: {
+        eventType: 'admin.audit.searched',
+        payload: { path: ['callerKeyId'], equals: callerKeyId },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(searched).not.toBeNull();
+    expect((searched!.payload as { callerKeyId: string }).callerKeyId).toBe(
+      callerKeyId,
+    );
+  });
 });

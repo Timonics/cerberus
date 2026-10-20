@@ -19,6 +19,10 @@ import {
  * `JwtAuthGuard` didn't run (e.g. the route is `@Public()`), this
  * guard has nothing to check — it returns false.
  *
+ * V1.7 (audit H-3): app-bound tokens never reach this guard —
+ * `JwtAuthGuard` rejects `typ: 'app'` tokens before attaching
+ * `req.user`, so the principal here is always user-bound.
+ *
  * Throws `UnauthorizedException` on insufficient scope. We use
  * `UnauthorizedException` (401) rather than `ForbiddenException` (403)
  * because OAuth2 RFC 6750 specifies 401 + `WWW-Authenticate: Bearer

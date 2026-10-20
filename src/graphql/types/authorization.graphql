@@ -54,40 +54,45 @@ type JwksDocument {
 The verified claims of a JWT access token. Returned by
 `Authorization.verifyAccessToken`.
 
-Mirrors the JWT payload: `sub`, `org`, `role`, `scope`, `jti`, `iat`,
-`exp`, `iss`, `aud`. The structure here flattens standard claims to
-top-level fields for ergonomic client access.
+These are the REAL claims of the verified token (as signed), not
+server-side fabrications: `sub`, `org`, `role`, `scope`, `jti`,
+`typ`, `iat`, `exp`, `iss`, `aud`. Nullable fields are null when
+the corresponding claim is absent from the token.
 """
 type AccessTokenClaims {
   """
-  Subject — the user's UUID. Use this to load the user via
-  `Identity.getUser(id: ...)`.
+  Subject — the user's UUID for user-bound tokens, the App UUID
+  for app-bound tokens (`typ: "app"`). Use this to load the user
+  via `Identity.getUser(id: ...)`.
   """
   sub: String!
 
-  """Organization ID. Null for personal-org users with no organization context."""
+  """Organization ID. Null for tokens issued without an org binding."""
   org: String
 
-  """User's role within the organization. Null if no organization."""
+  """User's role within the organization. Null for app-bound or org-less tokens."""
   role: Role
 
-  """Space-separated scopes. Use the `Scope` enum to parse."""
+  """Space-separated scopes actually carried by the token."""
   scope: String!
 
   """JWT ID. Unique per token. Used for audit-log correlation."""
   jti: String!
 
-  """Issued-at, epoch seconds."""
-  iat: Float!
+  """Token type claim: `user` or `app`. Null for legacy tokens predating the claim."""
+  typ: String
 
-  """Expiration, epoch seconds."""
-  exp: Float!
+  """Issued-at, epoch seconds. Null when absent from the token."""
+  iat: Float
 
-  """Issuer. Always `cerberus` in V1."""
-  iss: String!
+  """Expiration, epoch seconds. Null when absent from the token."""
+  exp: Float
 
-  """Audience. Defaults to `cerberus-clients` in V1."""
-  aud: String!
+  """Issuer, as verified against server configuration. Null when absent from the token."""
+  iss: String
+
+  """Audience, as verified against server configuration. Null when absent from the token."""
+  aud: String
 }
 
 """

@@ -41,6 +41,7 @@ export class EngagementAuditLogHandler implements OnModuleInit {
         if (event instanceof EmailVerificationRequested) {
           await this.record({
             userId: event.userId,
+            eventId: event.eventId,
             eventType: 'engagement.email_verification.requested',
             payload: { verificationId: event.verificationId },
           });
@@ -53,6 +54,7 @@ export class EngagementAuditLogHandler implements OnModuleInit {
         if (event instanceof EmailVerificationConsumed) {
           await this.record({
             userId: event.userId,
+            eventId: event.eventId,
             eventType: 'engagement.email_verification.completed',
             payload: { verificationId: event.verificationId },
           });
@@ -63,6 +65,7 @@ export class EngagementAuditLogHandler implements OnModuleInit {
       if (event instanceof PasswordResetRequested) {
         await this.record({
           userId: event.userId,
+          eventId: event.eventId,
           eventType: 'engagement.password_reset.requested',
           payload: { resetId: event.resetId },
         });
@@ -72,6 +75,7 @@ export class EngagementAuditLogHandler implements OnModuleInit {
       if (event instanceof PasswordResetConsumed) {
         await this.record({
           userId: event.userId,
+          eventId: event.eventId,
           eventType: 'engagement.password_reset.completed',
           payload: { resetId: event.resetId },
         });
@@ -81,19 +85,21 @@ export class EngagementAuditLogHandler implements OnModuleInit {
 
   private async record(input: {
     userId: string;
+    eventId: string;
     eventType: string;
     payload: Readonly<Record<string, unknown>>;
   }): Promise<void> {
     try {
       await this.recordAuditEventUc.execute(input);
     } catch (err) {
-      // V1.7 audit fix #31: P2002 = unique constraint violation.
-      // Means we already wrote this row — the outbox relay re-
-      // published a previously-processed event. Safe to ignore.
+      // V1.8 audit fix H-10: P2002 = the (eventType, eventId) unique
+      // constraint. Means we already wrote this row — the outbox
+      // relay re-published a previously-processed event. Safe to
+      // ignore.
       const message = err instanceof Error ? err.message : String(err);
       if (/P2002|Unique constraint/i.test(message)) {
         this.logger.debug(
-          `audit-log dedup: ${input.eventType} already recorded`,
+          `audit-log dedup: ${input.eventType}/${input.eventId} already recorded`,
         );
         return;
       }

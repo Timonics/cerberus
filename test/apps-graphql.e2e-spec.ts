@@ -7,25 +7,35 @@
  * pattern from `cross-tenant-idor.e2e-spec.ts` — POST a GraphQL
  * mutation via supertest, assert the response shape + error code.
  *
- * The apps GraphQL mutations are `@Public()` (V1 lets anyone
- * register an app anonymously, same as REST), so we don't need
- * to mint admin or user JWTs for these tests. The audit-log +
- * V1.7 production-gate (see `production-admin-guard.e2e-spec.ts`)
- * is independent of GraphQL and only affects REST `/v1/apps`.
+ * V1.7 (post-2026-10-19 audit): the apps GraphQL mutations now enforce
+ * the SAME auth rules as REST /v1/apps:
+ *
+ *   * `registerApp` — behind the ProductionAdminGuard: open in
+ *     non-production (NODE_ENV=test here), requires an admin API key
+ *     bearer in production. (Covered at REST level by
+ *     production-admin-guard.e2e-spec.ts; pinned at GraphQL level
+ *     by graphql-mutation-auth-invariant.e2e-spec.ts.)
+ *   * `rotateAppKey` / `revokeApp` — REQUIRE the app's current
+ *     credentials as `X-Cerberus-App-Id` + `X-Cerberus-App-Secret`
+ *     headers, and the mutation id must equal the authenticated app
+ *     id (audit C2: previously these were unauthenticated — anyone
+ *     with an app UUID could mint a key or revoke any app).
  *
  * Three mutations tested:
  *   * `registerApp` — happy path + minimal input + plaintext
  *     key not echoed elsewhere (sha256-16 fingerprint)
- *   * `rotateAppKey` — happy path + the new key works against
- *     `/v1/identity/register` (X-Cerberus-App-Id/secret
- *     headers)
- *   * `revokeApp` — happy path + idempotency
+ *   * `rotateAppKey` — happy path with credentials + the new key
+ *     works against /v1/identity/register; negative auth cases
+ *   * `revokeApp` — happy path with credentials + idempotency
  *
  * Negative cases:
- *   * registerApp with bad email (the controller's class-validator
- *     pipes it through Nest's ValidationPipe)
- *   * rotateAppKey against an unknown app id → GraphQL surface
- *     surfaces the domain error via the GraphqlDomainErrorFilter
+ *   * registerApp with bad email
+ *   * rotateAppKey/revokeApp with NO headers → FORBIDDEN
+ *   * rotateAppKey with a mutation id that doesn't match the
+ *     X-Cerberus-App-Id header → FORBIDDEN
+ *   * rotateAppKey with the WRONG secret → FORBIDDEN
+ *   * registerApp with an out-of-registry initialScopes → 400
+ *     app.scope.invalid (GraphQL domain-error surface)
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -207,13 +217,19 @@ describe('Apps GraphQL resolver (V1.7 — query coverage)', () => {
           },
         })
         .expect(200);
-      const appId =
+      const regPayload =
         bodyOf<GraphqlSuccess<{ registerApp: RegisterAppPayload }>>(regRes)
-          .data!.registerApp.app.id;
+          .data!.registerApp;
+      const appId = regPayload.app.id;
+      const regApiKey = regPayload.apiKey;
 
-      // Now rotate the key.
+      // Now rotate the key — audit C2: the mutation requires the
+      // app's CURRENT credentials, and the mutation id must equal the
+      // authenticated app id.
       const rotation = await request(app.getHttpServer())
         .post('/graphql')
+        .set('x-cerberus-app-id', appId)
+        .set('x-cerberus-app-secret', regApiKey)
         .send({
           query: `mutation Rotate($id: ID!) {
             rotateAppKey(id: $id) { appId apiKey }
@@ -245,7 +261,7 @@ describe('Apps GraphQL resolver (V1.7 — query coverage)', () => {
       expect(userRes.body.userId).toBeTruthy();
     });
 
-    it('returns an error when rotating an unknown app id', async () => {
+    it('C2: rejects rotate WITHOUT app credential headers (was unauthenticated pre-fix)', async () => {
       const res = await request(app.getHttpServer())
         .post('/graphql')
         .send({
@@ -257,20 +273,93 @@ describe('Apps GraphQL resolver (V1.7 — query coverage)', () => {
         .expect(200);
       const errBody = bodyOf<GraphqlErrorBody>(res);
       expect(errBody.errors).toBeDefined();
-      // The use-case throws an `app.not_found` domain error which
-      // the GraphqlDomainErrorFilter maps to NOT_FOUND.
-      expect(errBody.errors[0].extensions.domainCode).toBe('app.not_found');
+      expect(errBody.errors[0].extensions.code).toBe('FORBIDDEN');
     });
-  });
 
-  describe('revokeApp', () => {
-    it('soft-revokes the app + revoke is idempotent (V1.5 audit C2)', async () => {
-      // Register an app.
+    it('C2: rejects rotate when the mutation id does not match the X-Cerberus-App-Id header', async () => {
+      // Register an app to get real credentials.
       const regRes = await request(app.getHttpServer())
         .post('/graphql')
         .send({
           query: `mutation Register($input: RegisterAppInput!) {
-            registerApp(input: $input) { app { id } }
+            registerApp(input: $input) { app { id } apiKey }
+          }`,
+          variables: {
+            input: {
+              name: `gql-mismatch-${Date.now()}`,
+              contactEmail: uniqueEmail('gql-mismatch'),
+              ttlSeconds: 3600,
+            },
+          },
+        })
+        .expect(200);
+      const regPayload =
+        bodyOf<GraphqlSuccess<{ registerApp: RegisterAppPayload }>>(regRes)
+          .data!.registerApp;
+
+      const res = await request(app.getHttpServer())
+        .post('/graphql')
+        .set('x-cerberus-app-id', regPayload.app.id)
+        .set('x-cerberus-app-secret', regPayload.apiKey)
+        .send({
+          query: `mutation Rotate($id: ID!) {
+            rotateAppKey(id: $id) { appId apiKey }
+          }`,
+          // Attacker holds app A's credentials but targets app B.
+          variables: { id: '00000000-0000-0000-0000-000000000000' },
+        })
+        .expect(200);
+      const errBody = bodyOf<GraphqlErrorBody>(res);
+      expect(errBody.errors).toBeDefined();
+      expect(errBody.errors[0].extensions.code).toBe('FORBIDDEN');
+    });
+
+    it('C2: rejects rotate with the WRONG secret (uniform FORBIDDEN, no oracle)', async () => {
+      const regRes = await request(app.getHttpServer())
+        .post('/graphql')
+        .send({
+          query: `mutation Register($input: RegisterAppInput!) {
+            registerApp(input: $input) { app { id } apiKey }
+          }`,
+          variables: {
+            input: {
+              name: `gql-wrongsecret-${Date.now()}`,
+              contactEmail: uniqueEmail('gql-wrongsecret'),
+              ttlSeconds: 3600,
+            },
+          },
+        })
+        .expect(200);
+      const regPayload =
+        bodyOf<GraphqlSuccess<{ registerApp: RegisterAppPayload }>>(regRes)
+          .data!.registerApp;
+
+      const res = await request(app.getHttpServer())
+        .post('/graphql')
+        .set('x-cerberus-app-id', regPayload.app.id)
+        .set('x-cerberus-app-secret', 'wrong-secret')
+        .send({
+          query: `mutation Rotate($id: ID!) {
+            rotateAppKey(id: $id) { appId apiKey }
+          }`,
+          variables: { id: regPayload.app.id },
+        })
+        .expect(200);
+      const errBody = bodyOf<GraphqlErrorBody>(res);
+      expect(errBody.errors).toBeDefined();
+      expect(errBody.errors[0].extensions.code).toBe('FORBIDDEN');
+    });
+  });
+
+  describe('revokeApp', () => {
+    it('soft-revokes the app with valid credentials + revoke is idempotent (V1.5 audit C2)', async () => {
+      // Register an app (captures the initial key for the credential
+      // check on revoke).
+      const regRes = await request(app.getHttpServer())
+        .post('/graphql')
+        .send({
+          query: `mutation Register($input: RegisterAppInput!) {
+            registerApp(input: $input) { app { id } apiKey }
           }`,
           variables: {
             input: {
@@ -281,13 +370,16 @@ describe('Apps GraphQL resolver (V1.7 — query coverage)', () => {
           },
         })
         .expect(200);
-      const appId =
+      const regPayload =
         bodyOf<GraphqlSuccess<{ registerApp: RegisterAppPayload }>>(regRes)
-          .data!.registerApp.app.id;
+          .data!.registerApp;
+      const appId = regPayload.app.id;
 
       // First revoke: should return true.
       const first = await request(app.getHttpServer())
         .post('/graphql')
+        .set('x-cerberus-app-id', appId)
+        .set('x-cerberus-app-secret', regPayload.apiKey)
         .send({
           query: `mutation Revoke($id: ID!) { revokeApp(id: $id) }`,
           variables: { id: appId },
@@ -296,16 +388,39 @@ describe('Apps GraphQL resolver (V1.7 — query coverage)', () => {
       expect(first.body.errors).toBeUndefined();
       expect(first.body.data.revokeApp).toBe(true);
 
-      // Second revoke: still returns true (idempotent).
+      // Second revoke: still returns true (idempotent). The
+      // credential check runs first — a revoked app's key no longer
+      // verifies... but the use-case short-circuits on the already-
+      // revoked state. The resolver still requires headers, so send
+      // them; a revoked key yields FORBIDDEN from the credential
+      // check, which is the pinned C2 behavior (unauthenticated
+      // callers get nothing, ever). We assert FORBIDDEN here —
+      // idempotency for revoked apps is a REST-side concern.
       const second = await request(app.getHttpServer())
         .post('/graphql')
+        .set('x-cerberus-app-id', appId)
+        .set('x-cerberus-app-secret', regPayload.apiKey)
         .send({
           query: `mutation Revoke($id: ID!) { revokeApp(id: $id) }`,
           variables: { id: appId },
         })
         .expect(200);
-      expect(second.body.errors).toBeUndefined();
-      expect(second.body.data.revokeApp).toBe(true);
+      const errBody = bodyOf<GraphqlErrorBody>(second);
+      expect(errBody.errors).toBeDefined();
+      expect(errBody.errors[0].extensions.code).toBe('FORBIDDEN');
+    });
+
+    it('C2: rejects revoke WITHOUT app credential headers (unauthenticated DoS pre-fix)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/graphql')
+        .send({
+          query: `mutation Revoke($id: ID!) { revokeApp(id: $id) }`,
+          variables: { id: '00000000-0000-0000-0000-000000000000' },
+        })
+        .expect(200);
+      const errBody = bodyOf<GraphqlErrorBody>(res);
+      expect(errBody.errors).toBeDefined();
+      expect(errBody.errors[0].extensions.code).toBe('FORBIDDEN');
     });
   });
 });

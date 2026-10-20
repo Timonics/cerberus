@@ -47,10 +47,10 @@ export class RegisterAppDto {
    * V1.6 client_credentials grant: comma-separated OAuth2 scopes
    * the app is allowed to request via /v1/oauth/token.
    * Optional — empty means "no scopes" (the app can mint a
-   * token but gets zero). Empty default is safer than a
-   * permissive "auth:read auth:write" because a freshly-registered
-   * app shouldn't auto-claim any privileges — the operator must
-   * explicitly grant them via the admin API.
+   * token but gets zero). V1.7 (audit H-3): validated against
+   * the server-side app-scope registry (`app:register`,
+   * `app:auth`, `app:read`) — unknown or user-level scopes are
+   * rejected with `app.scope.invalid`, never persisted.
    */
   @IsOptional()
   @IsString()

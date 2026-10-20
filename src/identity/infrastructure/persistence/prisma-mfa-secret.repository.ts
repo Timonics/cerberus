@@ -8,6 +8,7 @@ import {
   MFA_SECRET_REPOSITORY,
   MfaSecretRepository,
 } from '../../domain/ports/mfa-secret.repository.port';
+import { TotpSecretCipher } from '../security/totp-secret-cipher';
 
 type PrismaTx = Prisma.TransactionClient | PrismaClient;
 
@@ -20,10 +21,19 @@ type PrismaTx = Prisma.TransactionClient | PrismaClient;
  * can't incrementally diff them; the aggregate owns the set).
  *
  * On `delete`, both rows are removed via the FK cascade.
+ *
+ * 2026-10-19 audit fix H-5a: the TOTP secret column is encrypted with
+ * AES-256-GCM (`TotpSecretCipher`) before it is written and decrypted
+ * on load. Recovery-code hashes are argon2 and stay as-is. Legacy
+ * plaintext rows decrypt as pass-through and are re-encrypted on the
+ * next save.
  */
 @Injectable()
 export class PrismaMfaSecretRepository extends MfaSecretRepository {
-  public constructor(private readonly prisma: PrismaService) {
+  public constructor(
+    private readonly prisma: PrismaService,
+    private readonly cipher: TotpSecretCipher,
+  ) {
     super();
   }
 
@@ -38,6 +48,7 @@ export class PrismaMfaSecretRepository extends MfaSecretRepository {
 
   public async save(tx: Tx, secret: MfaSecret): Promise<MfaSecret> {
     const client = tx as PrismaTx;
+    const encryptedSecret = this.cipher.encrypt(secret.secret);
 
     // Step 1: upsert the secret row.
     await client.mfaSecret.upsert({
@@ -45,11 +56,11 @@ export class PrismaMfaSecretRepository extends MfaSecretRepository {
       create: {
         id: secret.id,
         userId: secret.userId.value,
-        secret: secret.secret,
+        secret: encryptedSecret,
         confirmed: secret.confirmed,
       },
       update: {
-        secret: secret.secret,
+        secret: encryptedSecret,
         confirmed: secret.confirmed,
       },
     });
@@ -94,7 +105,7 @@ export class PrismaMfaSecretRepository extends MfaSecretRepository {
     return MfaSecret.fromPersistence({
       id: row.id,
       userId: UserId.rehydrate(row.userId),
-      secret: row.secret,
+      secret: this.cipher.decrypt(row.secret),
       confirmed: row.confirmed,
       recoveryCodes: row.recoveryCodes.map((rc) =>
         RecoveryCode.fromPersistence({

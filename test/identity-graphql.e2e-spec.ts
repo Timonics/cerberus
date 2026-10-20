@@ -79,6 +79,9 @@ describe('Identity GraphQL query coverage (V1.7)', () => {
   const email = uniqueEmail('gql-ident');
   const secondEmail = uniqueEmail('gql-ident2');
   const password = 'correct horse battery 42!';
+  // Set by the changePassword test — enableMfa (which runs after)
+  // must present the rotated password.
+  const NEW_PASSWORD = 'N3wP4ssw0rd!';
   const bodyOf = <T>(res: { body: unknown }): T => res.body as T;
 
   beforeAll(async () => {
@@ -119,11 +122,18 @@ describe('Identity GraphQL query coverage (V1.7)', () => {
       .expect(200);
     accessToken = bodyOf<LoginResp>(login).accessToken;
 
-    // Register a second user (in the same org) for the
-    // cross-user revoke test.
+    // Register a second user IN THE SAME ORG for the cross-user
+    // revoke + getUser tests. Post-H-2, getUser/adminUser enforce an
+    // org boundary — a user in a different (auto-created personal)
+    // org would return null. Joining the primary user's org keeps
+    // both tests meaningful.
     const reg2 = await request(app.getHttpServer())
       .post('/v1/identity/register')
-      .send({ email: secondEmail, password })
+      .send({
+        email: secondEmail,
+        password,
+        organizationSlug: reg.body.organizationSlug,
+      })
       .expect(201);
     secondUserId = reg2.body.userId;
     // Promote the primary user to OWNER for the org:admin test.
@@ -212,6 +222,53 @@ describe('Identity GraphQL query coverage (V1.7)', () => {
     expect(res.body.data.getUser).toBeNull();
   });
 
+  it('getUser(id) — returns null for a user in a DIFFERENT org (H-2 org boundary)', async () => {
+    // V1.7 audit fix H-2: org:admin scopes the caller to their own
+    // org. A user id from another org returns null instead of the
+    // victim's record (no cross-tenant read).
+    const otherReg = await request(app.getHttpServer())
+      .post('/v1/identity/register')
+      .send({ email: uniqueEmail('gql-ident3'), password })
+      .expect(201);
+    const otherUserId = otherReg.body.userId as string;
+    expect(otherReg.body.organizationId).not.toBe(orgId);
+
+    const res = await request(app.getHttpServer())
+      .post('/graphql')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        query: `query Get($id: ID!) {
+          getUser(id: $id) { id email }
+        }`,
+        variables: { id: otherUserId },
+      })
+      .expect(200);
+    expect(res.body.errors).toBeUndefined();
+    expect(res.body.data.getUser).toBeNull();
+  });
+
+  it('register — duplicate email returns the opaque 201 stub (no enumeration oracle)', async () => {
+    // 2026-10-19 audit LOW: re-registering an existing email returns
+    // the same 201 shape as a fresh registration (stub ids) — the
+    // client cannot tell the account already exists.
+    const res = await request(app.getHttpServer())
+      .post('/graphql')
+      .send({
+        query: `mutation Register($input: RegisterInput!) {
+          register(input: $input) { userId email organizationId organizationSlug autoCreatedOrg }
+        }`,
+        variables: { input: { email, password: 'Reg1sterP4ss!' } },
+      })
+      .expect(200);
+    expect(res.body.errors).toBeUndefined();
+    const r = res.body.data.register;
+    expect(r.userId).toBeTruthy();
+    expect(r.userId).not.toBe(userId); // opaque stub, not the real row
+    // The REAL user is untouched.
+    const stillThere = await prisma.user.findUnique({ where: { id: userId } });
+    expect(stillThere).not.toBeNull();
+  });
+
   it('register — public, mirrors REST /v1/identity/register', async () => {
     const newEmail = uniqueEmail('gql-ident-register');
     const res = await request(app.getHttpServer())
@@ -245,7 +302,7 @@ describe('Identity GraphQL query coverage (V1.7)', () => {
         variables: {
           input: {
             currentPassword: password,
-            newPassword: 'N3wP4ssw0rd!',
+            newPassword: NEW_PASSWORD,
           },
         },
       })
@@ -330,12 +387,17 @@ describe('Identity GraphQL query coverage (V1.7)', () => {
     expect(errBody.errors[0].extensions.code).toBe('INPUT_INVALID');
   });
 
-  it('enableMfa — returns TOTP secret + recovery codes', async () => {
+  it('enableMfa — returns TOTP secret + recovery codes (currentPassword required)', async () => {
+    // NOTE: the changePassword tests above rotated the account
+    // password to NEW_PASSWORD — enrollment verifies the CURRENT one.
     const res = await request(app.getHttpServer())
       .post('/graphql')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
-        query: `mutation { enableMfa { secret otpauthUrl recoveryCodes } }`,
+        query: `mutation Enable($input: EnableMfaInput!) {
+          enableMfa(input: $input) { secret otpauthUrl recoveryCodes }
+        }`,
+        variables: { input: { currentPassword: NEW_PASSWORD } },
       })
       .expect(200);
     expect(res.body.errors).toBeUndefined();

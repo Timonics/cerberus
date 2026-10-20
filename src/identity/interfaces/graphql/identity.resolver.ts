@@ -19,6 +19,7 @@ import {
   UpdateDisplayNameInput,
   MfaCodeInput,
   VerifyMfaInput,
+  EnableMfaInput,
 } from '../../../graphql/models/inputs';
 
 /**
@@ -84,11 +85,21 @@ export class IdentityResolver {
   @Query(() => 'User', {
     nullable: true,
     description:
-      'Look up any user by ID. Requires org:admin scope (OWNER or ADMIN role).',
+      "Look up a user by ID within the caller's organization. Requires org:admin scope (OWNER or ADMIN role). Returns null if the user does not exist or belongs to a different organization.",
   })
-  public async getUser(@Args('id') id: string) {
+  public async getUser(
+    @CurrentUser() user: { sub: string },
+    @Args('id') id: string,
+  ) {
     try {
+      // V1.7 (audit H-2): org boundary. `org:admin` scopes the
+      // caller to their own org — resolve both orgs and compare.
+      // Cross-tenant lookups return null (indistinguishable from
+      // "user does not exist", so the endpoint can't be used as a
+      // cross-tenant user-enumeration oracle).
+      const caller = await this.getUserUc.execute({ userId: user.sub });
       const u = await this.getUserUc.execute({ userId: id });
+      if (u.organizationId !== caller.organizationId) return null;
       return {
         id: u.userId,
         email: u.email,
@@ -180,10 +191,16 @@ export class IdentityResolver {
   @AuthGuard()
   @Mutation(() => 'MfaEnrollment', {
     description:
-      'Begin MFA enrollment. Returns the TOTP secret and 10 recovery codes (each returned ONCE).',
+      'Begin MFA enrollment. Requires the current password (fresh auth) — verified before the enrollment is created. Returns the TOTP secret and 10 recovery codes (each returned ONCE).',
   })
-  public async enableMfa(@CurrentUser() user: { sub: string }) {
-    const result = await this.enableMfaUc.execute({ userId: user.sub });
+  public async enableMfa(
+    @CurrentUser() user: { sub: string },
+    @Args('input') input: EnableMfaInput,
+  ) {
+    const result = await this.enableMfaUc.execute({
+      userId: user.sub,
+      currentPassword: input.currentPassword,
+    });
     return {
       secret: result.secret,
       otpauthUrl: result.otpAuthUrl,

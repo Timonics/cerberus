@@ -1,26 +1,26 @@
 import { randomBytes } from 'node:crypto';
 import { Clock, DomainError } from '../../../shared/domain';
 import { AppApiKey } from './app-api-key';
+import { filterAppScopes } from '../value-objects/app-scope';
 
 /**
  * Parse a comma-separated scopes string into a deduplicated,
- * trimmed list. Empty / whitespace-only inputs become an empty
- * array — the caller then sees zero scopes (RFC 6749 §3.3:
- * the server is the authority on what's allowed).
+ * trimmed list intersected with the server-side app-scope
+ * registry (`filterAppScopes`). Empty / whitespace-only inputs
+ * become an empty array — the caller then sees zero scopes
+ * (RFC 6749 §3.3: the server is the authority on what's allowed).
+ *
+ * V1.7 (audit H-3): the registry intersection happens HERE, on
+ * the read path, so even a row persisted before the registry
+ * existed (holding e.g. `org:admin`) can never widen what a
+ * client_credentials token is granted.
  *
  * Used by both the App aggregate (to expose `allowedScopesList`)
  * and the OAuth client_credentials use case (to compute the
  * downgraded scope set).
  */
 export function parseScopeList(csv: string): string[] {
-  return Array.from(
-    new Set(
-      csv
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0),
-    ),
-  );
+  return filterAppScopes(csv.split(','));
 }
 
 /**

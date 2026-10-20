@@ -124,10 +124,11 @@ describe('C-1 — cross-tenant IDOR (HTTP)', () => {
 
     // Victim enables + confirms MFA so AdminDisableUserMfa has
     // something to disable (the use-case throws 404 if no MFA row).
+    // 2026-10-19: enrollment requires the current password.
     const enableResult = await request(app.getHttpServer())
       .post('/v1/identity/mfa/enable')
       .set('Authorization', `Bearer ${victimAccess}`)
-      .send({})
+      .send({ currentPassword: password })
       .expect(200);
     const code = authenticator.generate(
       bodyOf<EnableResp>(enableResult).secret,
@@ -158,7 +159,6 @@ describe('C-1 — cross-tenant IDOR (HTTP)', () => {
         variables: {
           input: {
             userId: victimUserId,
-            adminKeyId: null,
             reason: 'cross-tenant attack',
           },
         },
@@ -192,7 +192,6 @@ describe('C-1 — cross-tenant IDOR (HTTP)', () => {
         variables: {
           input: {
             userId: victimUserId,
-            adminKeyId: null,
             reason: 'self-test',
           },
         },

@@ -24,6 +24,7 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
     const row = await client.auditLog.create({
       data: {
         id: entry.id,
+        eventId: entry.eventId,
         userId: entry.userId,
         eventType: entry.eventType.value,
         payload: entry.payload as unknown as Prisma.InputJsonValue,
@@ -34,6 +35,7 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
     });
     return AuditLog.fromPersistence({
       id: row.id,
+      eventId: row.eventId,
       userId: row.userId,
       eventType: AuditEventType.rehydrate(row.eventType),
       payload: row.payload as Readonly<Record<string, unknown>>,
@@ -48,6 +50,7 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
     userId: UserId,
     limit: number,
     range?: AuditLogTimeRange,
+    offset = 0,
   ): Promise<ReadonlyArray<AuditLog>> {
     const client = tx as PrismaTx;
     const rows = await client.auditLog.findMany({
@@ -57,10 +60,12 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
+      skip: offset,
     });
     return rows.map((row) =>
       AuditLog.fromPersistence({
         id: row.id,
+        eventId: row.eventId,
         userId: row.userId,
         eventType: AuditEventType.rehydrate(row.eventType),
         payload: row.payload as object as Readonly<Record<string, unknown>>,
@@ -76,6 +81,7 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
     eventType: AuditEventType,
     limit: number,
     range?: AuditLogTimeRange,
+    offset = 0,
   ): Promise<ReadonlyArray<AuditLog>> {
     const client = tx as PrismaTx;
     const rows = await client.auditLog.findMany({
@@ -85,10 +91,12 @@ export class PrismaAuditLogRepository extends AuditLogRepository {
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
+      skip: offset,
     });
     return rows.map((row) =>
       AuditLog.fromPersistence({
         id: row.id,
+        eventId: row.eventId,
         userId: row.userId,
         eventType: AuditEventType.rehydrate(row.eventType),
         payload: row.payload as object as Readonly<Record<string, unknown>>,

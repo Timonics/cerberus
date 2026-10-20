@@ -122,10 +122,15 @@ export class IssueAccessTokenUseCase {
           );
         }
         if (!org) {
-          // The slug doesn't exist at all — treat as no membership for
-          // that org; fall back to the user's existing membership so the
-          // token can still be issued (legacy compat).
-          void 0;
+          // 2026-10-19 audit MEDIUM fix: the pinned org slug doesn't
+          // exist. Previously this silently fell through and minted a
+          // token scoped to the user's FIRST org — the caller asked
+          // for one tenant and got another. Fail loud instead.
+          throw new DomainError(
+            'identity.organization.not_found',
+            'The requested organization does not exist',
+            { requestedOrgSlug: input.organizationSlug },
+          );
         }
       }
       const scopes = this.scopesFor(membership, input.scopes);
@@ -139,6 +144,10 @@ export class IssueAccessTokenUseCase {
       }
 
       const payload: Record<string, unknown> = {
+        // V1.7 (audit H-3): mark user-bound tokens so guards and
+        // VerifyAccessTokenUseCase can discriminate them from
+        // `typ: 'app'` client-credentials tokens.
+        typ: 'user',
         sub: userId.value,
         org: membership?.organizationId.value ?? null,
         role: membership?.role.value ?? null,

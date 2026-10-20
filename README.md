@@ -135,6 +135,34 @@ Client                                          Cerberus
   ◀── 200 [ { id, deviceLabel, ... } ] ──────────┤
 ```
 
+**Pattern 1b: MFA-enabled accounts (two-step login)**
+
+When the user has MFA enabled, login does NOT return tokens — it returns a
+pending state and a short-lived, `mfa:verify`-scoped JWT:
+
+```text
+Client                                          Cerberus
+  │                                                 │
+  ├──POST /v1/auth/login ───────────────────────▶│
+  │   { email, password }                           │
+  │                                                 │
+  ◀── 200 { mfaRequired: true, mfaToken,           │
+  │         sessionId }                             │
+  │                                                 │
+  ├──POST /v1/identity/mfa/verify ───────────────▶│
+  │   Authorization: Bearer <mfaToken>              │
+  │   { sessionId, code }  (or mfaCode inline in    │
+  │    the original login body)                     │
+  │                                                 │
+  ◀── 200 { accessToken, refreshToken,              │
+  │         mfaVerified: true } ───────────────────┤
+```
+
+Until `mfa/verify` succeeds, the session's `mfaVerified` flag is false and
+**every token-issuing path refuses it**: `POST /v1/auth/refresh` and the
+OAuth2 refresh_token grant both return 401 `authentication.mfa.required`.
+There is no way to turn a password into a token without the second factor.
+
 **Pattern 2: App-bound login**
 
 When you register an app, you bind it to a default organization. Users who
@@ -167,6 +195,14 @@ All config is loaded from environment variables. The full set lives in
 | `JWT_AUDIENCE_DEFAULT` | `cerberus-clients` | The `aud` claim. |
 | `ACCESS_TOKEN_TTL` | `900` | Seconds (15 min). |
 | `REFRESH_TOKEN_TTL` | `2592000` | Seconds (30 days). |
+| `TOKEN_SECRET` | `CHANGEME_AT_LEAST_32_CHARS_PLEASE_01` (dev default) | HMAC master secret (32+ chars). Rejected at boot when `NODE_ENV=production` if left at the dev default. Also derives the outbox-encryption and reset/verification token keys. Generate with `openssl rand -base64 48`. |
+| `ADMIN_LOOKUP_SECRET` | `CHANGEME_AT_LEAST_32_CHARS_PLEASE_01` (dev default) | HMAC secret for admin-key lookup tokens. Same production rejection as `TOKEN_SECRET`. |
+| `MFA_SECRET_KEY` | `CHANGEME_AT_LEAST_32_CHARS_PLEASE_01` (dev default) | AES key for TOTP-secret encryption at rest (`mfa_secrets.secret` is stored as `v1:...` ciphertext). Required in production. |
+| `MFA_PENDING_TOKEN_TTL` | `600` | Seconds. Lifetime of the `mfaToken` issued by login when the second factor is still outstanding. Issuance is capped at 10 pending tokens / hour / email so the flow can't be used to mint unlimited scoped JWTs. |
+| `TRUST_PROXY_HOPS` | `1` | Trusted reverse-proxy hops for the **public** listener (X-Forwarded-For parsing). |
+| `ADMIN_TRUST_PROXY_HOPS` | `0` | Same for the **admin** listener. Keep at 0 unless a real reverse proxy fronts port 3001 — 1+ lets clients spoof XFF past the IP allowlist. |
+| `GRAPHQL_INTROSPECTION` | on outside production, off in production | Enables the SDL introspection query. Decided by the env validator; these vars override. |
+| `GRAPHQL_PLAYGROUND` | on outside production, off in production | Enables the Apollo Sandbox / GraphQL tooling UI. |
 | `EMAIL_TRANSPORT` | `log` | `log` \| `smtp` \| `sendgrid`. `log` writes to stdout; `smtp` needs the SMTP_* block; `sendgrid` needs `SENDGRID_API_KEY`. |
 | `ADMIN_API_KEY_HASH` | empty | Initial value is empty — must be seeded directly via DB on first boot. V1.5 will add a CLI bootstrap command. |
 | `ADMIN_IP_ALLOWLIST` | `127.0.0.1/32,::1/128` | CIDR list for the admin listener. |
@@ -196,6 +232,14 @@ Interactive: [`http://localhost:3000/api-docs`](http://localhost:3000/api-docs).
 
 GraphQL operations are documented in [`src/graphql/types/*.graphql`](src/graphql/types/).
 Both surfaces share the same use-cases — GraphQL is just a second transport.
+
+App-management mutations mirror the REST gates: `registerApp` is open in
+non-production (admin-key gated in production, same `ProductionAdminGuard`
+as `POST /v1/apps`); `rotateAppKey` and `revokeApp` require the app's own
+current credentials — the `X-Cerberus-App-Id` + `X-Cerberus-App-Secret`
+headers must verify, and the mutation's `id` argument must equal the
+`X-Cerberus-App-Id` header. Every failure mode collapses into `FORBIDDEN`
+so the mutations can't be used as an app-existence oracle.
 
 ### Admin listener — port 3001
 
@@ -250,8 +294,10 @@ curl -X POST http://localhost:3000/v1/apps \
 # ↑ STORE THE apiKey IMMEDIATELY. It is shown ONCE.
 ```
 
-You'll need to seed the `acme-org` first (V1 has no public endpoint for empty
-org creation — V1.5 will add `POST /admin/orgs`). The fastest path:
+You'll need to seed the `acme-org` first. Operators with an admin API key
+can pre-create empty orgs via `POST /admin/orgs` with
+`{slug, name, description?}` (see the admin listener section below). The
+fastest local path without an admin key:
 
 ```bash
 docker exec cerberus-postgres psql -U cerberus -d cerberus -c \
@@ -441,7 +487,12 @@ filter (V1 rejects unbounded queries).
 
 Tracked in code as `// V1.5 will add` comments. Highlights:
 
-- **Per-email rate limiting** — login-attempt counters are global, not per-email.
+- **Per-email rate limiting** — done. Beyond the per-IP buckets, the
+  throttle guard keeps a separate per-email counter (default
+  10/min/email/route) so an attacker rotating IPs against one account
+  still hits a ceiling; the OAuth password grant feeds the caller's
+  email into the same bucket. See `src/common/throttle.guard.ts` and
+  `RATE_LIMIT_PER_EMAIL_MAX`.
 - **Outbox pattern for events** — implemented and live. Use-cases persist
   events to `outbox_events` inside the same transaction; `OutboxRelay`
   polls every 1s and re-publishes through the in-process `EventBus`.
@@ -456,10 +507,12 @@ Tracked in code as `// V1.5 will add` comments. Highlights:
 - **Replace `X-User-Id` placeholder auth** — done in V1.5 (JwtAuthGuard +
   @CurrentUser). The `Authorization: Bearer *** header is required
   for all authenticated endpoints.
-- **Cron cleanup of expired rows** — `email_verifications`,
-  `password_resets`, expired `mfa_secrets`, and `sessions` are not
-  reaped automatically. The tables grow forever until a V1.5
-  cron job lands.
+- **Cron cleanup of expired rows** — done. Expired/outlived rows in
+  `email_verifications`, `password_resets`, `mfa_secrets`, `sessions`,
+  and processed `outbox_events` (after `CLEANUP_OUTBOX_TTL_DAYS`,
+  default 7 — counted from the event's creation so dead-lettered rows
+  are purged too) are reaped by the cleanup module's scheduled sweep.
+  See `src/cleanup/`.
 - **HTTP hardening** — body limit (100 KiB) + 30s request/response
   timeouts configurable via `HTTP_BODY_LIMIT_BYTES`,
   `HTTP_REQUEST_TIMEOUT_MS`, `HTTP_RESPONSE_TIMEOUT_MS`.
@@ -468,11 +521,14 @@ Tracked in code as `// V1.5 will add` comments. Highlights:
 - **Auto-revoke old key on rotation** — done in V1.5. The previous
   `AppApiKey` row is marked `revokedAt = now()` in the same tx as
   the rotation; the new key is the only one that authenticates.
-- **Audit log coverage** — done. 23 event types defined in
-  `AUDIT_EVENT_TYPES`, all 23 now actually written. Missing ones
-  (account lockout, email verified, all 4 engagement events, both
-  token events, admin audit searched, admin organization created)
-  wired through either in-use-case calls or the
+- **Audit log coverage** — done. 35 event types defined in
+  `AUDIT_EVENT_TYPES`, all 35 actually written, including the
+  2026-10-19 additions (refresh reuse/family revocation, MFA-pending
+  refresh, login throttling, MFA verify outcomes, password-reset
+  rotation, opaque duplicate registration, domain-based org joins).
+  Missing ones (account lockout, email verified, all 4 engagement
+  events, both token events, admin audit searched, admin organization
+  created) wired through either in-use-case calls or the
   `EngagementAuditLogHandler` cross-context subscriber.
 
 ## Contributing

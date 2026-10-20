@@ -43,8 +43,17 @@ export class JwtSignerService implements OnModuleInit {
   /**
    * Cached verification keys. Keyed by `kid`. Populated lazily on the
    * first `verifyAccessToken` call with a `kid` we haven't seen.
+   *
+   * Audit 2026-10-19: the cache stores the key's `expiresAt` alongside
+   * the `CryptoKey` and re-checks it on every hit. Previously a cached
+   * key was used forever — tokens kept verifying against an
+   * expired-but-cached signing key until the process restarted or a
+   * rotation happened to clear the cache.
    */
-  private verifyingKeys: Map<string, CryptoKey> = new Map();
+  private verifyingKeys: Map<
+    string,
+    { key: CryptoKey; expiresAt: Date | null }
+  > = new Map();
 
   public constructor(
     @Inject(TRANSACTION_RUNNER) private readonly txRunner: TransactionRunner,
@@ -110,10 +119,21 @@ export class JwtSignerService implements OnModuleInit {
     if (typeof kid !== 'string') {
       throw new Error('Token header missing kid');
     }
-    let cryptoKey = this.verifyingKeys.get(kid);
-    if (!cryptoKey) {
-      cryptoKey = await this.loadKey(kid);
-      this.verifyingKeys.set(kid, cryptoKey);
+    const now = new Date();
+    let cached = this.verifyingKeys.get(kid);
+    if (
+      cached &&
+      cached.expiresAt !== null &&
+      cached.expiresAt.getTime() <= now.getTime()
+    ) {
+      // Expired keys are rejected, never used for verification —
+      // drop the stale cache entry and fail closed.
+      this.verifyingKeys.delete(kid);
+      throw new Error(`Signing key kid=${kid} has expired`);
+    }
+    if (!cached) {
+      cached = await this.loadKey(kid);
+      this.verifyingKeys.set(kid, cached);
     }
     // V1.7 audit fix #14: explicitly pin the algorithm to RS256.
     // jose v5's `jwtVerify` accepts the algorithm from the token's
@@ -125,7 +145,7 @@ export class JwtSignerService implements OnModuleInit {
     // key as the HMAC secret. Locking to RS256 here makes that
     // attack impossible regardless of what the key generator
     // does in the future.
-    const { payload } = await jwtVerify(params.token, cryptoKey, {
+    const { payload } = await jwtVerify(params.token, cached.key, {
       issuer: params.issuer,
       audience: params.audience,
       algorithms: ['RS256'],
@@ -134,10 +154,15 @@ export class JwtSignerService implements OnModuleInit {
   }
 
   /**
-   * Load a key from the repo and import it as a `CryptoKey`.
-   * Returns null if the kid is unknown OR the key is past its `expiresAt`.
+   * Load a key from the repo and import it as a `CryptoKey`, along with
+   * its `expiresAt` so cache hits can re-check expiry. Throws if the
+   * kid is unknown OR the key is past its `expiresAt`.
    */
-  private async loadKey(kid: string): Promise<CryptoKey> {
+  private async loadKey(kid: string): Promise<{
+    key: CryptoKey;
+    /** Null = the key never expires. */
+    expiresAt: Date | null;
+  }> {
     const key = await this.txRunner.run<SigningKey | null>(async (tx: Tx) =>
       this.keyRepo.findByKid(tx, kid),
     );
@@ -148,7 +173,8 @@ export class JwtSignerService implements OnModuleInit {
       throw new Error(`Signing key kid=${kid} has expired`);
     }
     const { importPKCS8 } = await import('jose');
-    return importPKCS8(key.privatePem, 'RS256');
+    const cryptoKey: CryptoKey = await importPKCS8(key.privatePem, 'RS256');
+    return { key: cryptoKey, expiresAt: key.expiresAt };
   }
 
   /**

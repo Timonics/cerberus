@@ -65,14 +65,16 @@ describe('Apps module lifecycle (integration)', () => {
     expect(rotated.plaintextApiKey).not.toBe(reg.plaintextApiKey);
     expect(rotated.app.id).toBe(reg.app.id);
 
-    // Old key should now throw (App aggregate no longer holds the
-    // old hash).
+    // Old key should now throw. VerifyAppApiKeyUseCase collapses every
+    // credential failure (unknown app / revoked app / wrong secret /
+    // stale key) into the ONE uniform code so the endpoint can't be
+    // used as a key-state oracle.
     await expect(
       verifyUc.execute({
         appId: reg.app.id,
         plaintextApiKey: reg.plaintextApiKey,
       }),
-    ).rejects.toMatchObject({ code: 'app.api_key.invalid' });
+    ).rejects.toMatchObject({ code: 'app.credentials.invalid' });
 
     // New key works.
     const verify2 = await verifyUc.execute({
@@ -85,13 +87,16 @@ describe('Apps module lifecycle (integration)', () => {
     // 4. Revoke the app entirely.
     await revokeUc.execute(reg.app.id);
 
-    // The new key should now also be rejected (app is revoked).
+    // The new key should now also be rejected. VerifyAppApiKeyUseCase
+    // deliberately returns the SAME uniform code for a revoked app —
+    // a distinct 'app.revoked' here would let callers probe app
+    // lifecycle state.
     await expect(
       verifyUc.execute({
         appId: reg.app.id,
         plaintextApiKey: rotated.plaintextApiKey,
       }),
-    ).rejects.toMatchObject({ code: 'app.revoked' });
+    ).rejects.toMatchObject({ code: 'app.credentials.invalid' });
   });
 
   it('rotate on a revoked app throws', async () => {

@@ -1,6 +1,7 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Injectable } from '@nestjs/common';
+import { OUTBOX_MAX_ATTEMPTS_BEFORE_DEAD } from '../../shared/infrastructure/events/outbox-relay';
 import {
   CleanupRepository,
   CleanupResult,
@@ -17,7 +18,10 @@ import {
  * The pattern of "delete many with a where-clause" is consistent with
  * Prisma's `deleteMany`: it issues a single SQL DELETE statement with
  * the filter baked in, which Postgres can satisfy with the existing
- * `expiresAt` / `revokedAt` / `processedAt` indexes.
+ * `expiresAt` / `revokedAt` / `processedAt` indexes. The one
+ * exception is `audit_logs` (V1.8): its retention window can cover
+ * millions of rows, so it is deleted in batches of 10,000 (see
+ * `deleteAuditLogsInBatches`) to bound row locks and table bloat.
  *
  * Rows are deleted in a single transaction per pass. If any one
  * delete fails, the transaction rolls back — this is the right
@@ -71,13 +75,25 @@ export class PrismaCleanupRepository extends CleanupRepository {
 
     // Sessions: revoke timestamps are kept around for 30 days by
     // default so users can answer "when was my device signed out?"
-    // for a month. After that, the row is gone.
+    // for a month. After that, the row is gone. V1.8: also purge
+    // sessions that simply expired without ever being revoked —
+    // those used to linger forever (the predicate only matched
+    // `revokedAt`).
     deleted.sessions = await this.tryDelete(() =>
       client.session.deleteMany({
         where: {
-          revokedAt: {
-            lt: new Date(Date.now() - ttls.sessionTtlDays * 86_400_000),
-          },
+          OR: [
+            {
+              revokedAt: {
+                lt: new Date(Date.now() - ttls.sessionTtlDays * 86_400_000),
+              },
+            },
+            {
+              expiresAt: {
+                lt: new Date(Date.now() - ttls.sessionTtlDays * 86_400_000),
+              },
+            },
+          ],
         },
       }),
     );
@@ -134,13 +150,22 @@ export class PrismaCleanupRepository extends CleanupRepository {
     // Outbox: keep processed rows for 7 days so operators can audit
     // what events flowed through. After that, the row is gone — the
     // in-memory bus subscribers have already done their work, and
-    // the audit log captures the human-facing record.
+    // the audit log captures the human-facing record. V1.8 audit fix
+    // C3: dead-lettered rows (attempts >= the relay's max) are never
+    // marked processed, so purge them by `createdAt` once they are
+    // older than the TTL — otherwise the live plaintext-token
+    // ciphertexts they hold would be retained forever.
+    const outboxCutoff = new Date(Date.now() - ttls.outboxTtlDays * 86_400_000);
     deleted.outbox_events = await this.tryDelete(() =>
       client.outboxEvent.deleteMany({
         where: {
-          processedAt: {
-            lt: new Date(Date.now() - ttls.outboxTtlDays * 86_400_000),
-          },
+          OR: [
+            { processedAt: { lt: outboxCutoff } },
+            {
+              attempts: { gte: OUTBOX_MAX_ATTEMPTS_BEFORE_DEAD },
+              createdAt: { lt: outboxCutoff },
+            },
+          ],
         },
       }),
     );
@@ -149,17 +174,49 @@ export class PrismaCleanupRepository extends CleanupRepository {
     // IP addresses are PII; the retention policy is documented in
     // the env schema (CLEANUP_AUDIT_LOG_TTL_DAYS, default 90).
     // Disabled by setting the env var to 0.
-    deleted.audit_logs = await this.tryDelete(() =>
-      client.auditLog.deleteMany({
-        where: {
-          createdAt: {
-            lt: new Date(Date.now() - ttls.auditLogTtlDays * 86_400_000),
-          },
-        },
-      }),
-    );
+    //
+    // V1.8: batched — one giant DELETE over 90 days of rows holds
+    // row locks and generates bloat under load. Delete in chunks of
+    // 10,000 instead.
+    deleted.audit_logs = await this.tryDelete(async () => ({
+      count: await this.deleteAuditLogsInBatches(
+        client,
+        new Date(Date.now() - ttls.auditLogTtlDays * 86_400_000),
+      ),
+    }));
 
     return { deleted, durationMs: Date.now() - start };
+  }
+
+  /**
+   * Delete audit rows older than `cutoff` in batches of 10,000.
+   *
+   * Prisma's `deleteMany` cannot LIMIT, so each batch is a bounded
+   * `findMany` (id-only, walking the `createdAt` index) followed by
+   * a `deleteMany` on those ids. The loop stops as soon as a batch
+   * comes back short — or empty.
+   */
+  private async deleteAuditLogsInBatches(
+    client: PrismaClient,
+    cutoff: Date,
+  ): Promise<number> {
+    const BATCH_SIZE = 10_000;
+    let total = 0;
+    for (;;) {
+      const batch = await client.auditLog.findMany({
+        where: { createdAt: { lt: cutoff } },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+        take: BATCH_SIZE,
+      });
+      if (batch.length === 0) break;
+      const { count } = await client.auditLog.deleteMany({
+        where: { id: { in: batch.map((row) => row.id) } },
+      });
+      total += count;
+      if (batch.length < BATCH_SIZE) break;
+    }
+    return total;
   }
 
   /**

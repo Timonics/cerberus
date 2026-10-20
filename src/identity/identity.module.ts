@@ -8,7 +8,10 @@ import { PrismaOrganizationDomainRepository } from './infrastructure/persistence
 import { PrismaOrganizationRepository } from './infrastructure/persistence/prisma-organization.repository';
 import { PrismaUserRepository } from './infrastructure/persistence/prisma-user.repository';
 import { TotpService } from './infrastructure/security/totp.service';
+import { TotpSecretCipher } from './infrastructure/security/totp-secret-cipher';
+import { RedisMfaAttemptTracker } from './infrastructure/persistence/redis-mfa-attempt.tracker';
 import { ChangePasswordUseCase } from './application/use-cases/change-password.use-case';
+import { CompleteMfaVerificationUseCase } from './application/use-cases/complete-mfa-verification.use-case';
 import { ConfirmMfaEnrollmentUseCase } from './application/use-cases/confirm-mfa-enrollment.use-case';
 import { DisableMfaUseCase } from './application/use-cases/disable-mfa.use-case';
 import { EnableMfaUseCase } from './application/use-cases/enable-mfa.use-case';
@@ -17,11 +20,15 @@ import { RegisterUserUseCase } from './application/use-cases/register-user.use-c
 import { CreateOrganizationUseCase } from './application/use-cases/create-organization.use-case';
 import { UpdateDisplayNameUseCase } from './application/use-cases/update-display-name.use-case';
 import { VerifySecondFactorUseCase } from './application/use-cases/verify-second-factor.use-case';
+import { MfaEnabledSessionRevoker } from './application/event-handlers/mfa-enabled-session-revocation.handler';
+import { EmailVerifiedDomainJoinHandler } from './application/event-handlers/email-verified-domain-join.handler';
 import { IdentityController } from './interfaces/http/identity.controller';
 import { IdentityResolver } from './interfaces/graphql/identity.resolver';
+import { MfaVerifyGuard } from './interfaces/security/mfa-verify.guard';
 import { PASSWORD_HASHER } from '../shared/domain/value-objects/password-hash';
 import { CREDENTIAL_REPOSITORY } from './domain/ports/credential.repository.port';
 import { MEMBERSHIP_REPOSITORY } from './domain/ports/membership.repository.port';
+import { MFA_ATTEMPT_TRACKER } from './domain/ports/mfa-attempt-tracker.port';
 import { MFA_SECRET_REPOSITORY } from './domain/ports/mfa-secret.repository.port';
 import { ORGANIZATION_DOMAIN_REPOSITORY } from './domain/ports/organization-domain.repository.port';
 import { ORGANIZATION_REPOSITORY } from './domain/ports/organization.repository.port';
@@ -57,6 +64,11 @@ import { AppsModule } from '../apps/apps.module';
     // Infrastructure
     Argon2PasswordHasher,
     TotpService,
+    TotpSecretCipher,
+    {
+      provide: MFA_ATTEMPT_TRACKER,
+      useClass: RedisMfaAttemptTracker,
+    },
     {
       provide: CREDENTIAL_REPOSITORY,
       useClass: PrismaCredentialRepository,
@@ -91,8 +103,16 @@ import { AppsModule } from '../apps/apps.module';
     ConfirmMfaEnrollmentUseCase,
     DisableMfaUseCase,
     VerifySecondFactorUseCase,
+    CompleteMfaVerificationUseCase,
     GetUserUseCase,
     UpdateDisplayNameUseCase,
+
+    // Cross-context event handlers (2026-10-19 audit fixes)
+    MfaEnabledSessionRevoker,
+    EmailVerifiedDomainJoinHandler,
+
+    // Route guards
+    MfaVerifyGuard,
 
     // GraphQL resolver
     IdentityResolver,
@@ -105,6 +125,7 @@ import { AppsModule } from '../apps/apps.module';
     ConfirmMfaEnrollmentUseCase,
     DisableMfaUseCase,
     VerifySecondFactorUseCase,
+    CompleteMfaVerificationUseCase,
     GetUserUseCase,
     UpdateDisplayNameUseCase,
     PASSWORD_HASHER,

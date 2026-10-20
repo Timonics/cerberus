@@ -48,14 +48,16 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
   const httpCfg = app.get(ConfigService).getOrThrow<AppConfig['http']>('http');
   app.use(json({ limit: httpCfg.bodyLimitBytes }));
   app.use(urlencoded({ limit: httpCfg.bodyLimitBytes, extended: true }));
-  // V1.7 audit fix #12: same trust-proxy handling as the public
-  // app. The IpAllowlistGuard on /admin/* reads `req.ip`, which
-  // would be the LB's IP without this — denying every legitimate
-  // request.
-  // V1.7 audit fix #12
+  // V1.7 audit fix #12 + audit 2026-10-19 H-11: the ADMIN listener has
+  // its OWN trust-proxy knob (`adminTrustProxyHops`, default 0). The
+  // public listener's default of 1 must NOT apply here: if the admin
+  // port is directly reachable, trusting XFF lets any client spoof
+  // `X-Forwarded-For: 127.0.0.1` and walk past the IpAllowlistGuard.
+  // Set ADMIN_TRUST_PROXY_HOPS explicitly when a real reverse proxy
+  // sits in front of the admin port.
   (app.getHttpAdapter().getInstance() as ExpressApplication).set(
     'trust proxy',
-    httpCfg.trustProxyHops,
+    httpCfg.adminTrustProxyHops,
   );
   const server = app.getHttpServer() as HttpServer;
   if (server && typeof server.setTimeout === 'function') {
@@ -72,22 +74,20 @@ export async function bootstrapAdminApp(): Promise<INestApplication> {
     next();
   });
 
-  // Skip helmet on /admin/docs (Scalar UI), same as the public app.
-  // helmet's strict CSP blocks Scalar's inline scripts and CDN assets.
-  // We also explicitly remove any CSP-related headers that may have
-  // leaked from earlier middleware (defensive against cache).
+  // Audit 2026-10-19 (helmet on docs paths): /admin/docs gets helmet
+  // with CSP + COEP disabled (Scalar's UI needs inline scripts and CDN
+  // assets); every other admin route gets the strict defaults. The docs
+  // path is NO LONGER helmet-free — only its CSP/COEP are relaxed.
+  const relaxedHelmet = helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  });
   app.use((req: Request, res: Response, next: NextFunction) => {
     const isDocsPath =
       req.path === '/admin/docs' || req.path.startsWith('/admin/docs/');
-    if (isDocsPath) {
-      res.removeHeader('Content-Security-Policy');
-      res.removeHeader('Content-Security-Policy-Report-Only');
-      res.removeHeader('Cross-Origin-Embedder-Policy');
-      res.removeHeader('Cross-Origin-Opener-Policy');
-      res.removeHeader('Cross-Origin-Resource-Policy');
-      return next();
-    }
-    return helmet()(req, res, next);
+    return isDocsPath
+      ? relaxedHelmet(req, res, next)
+      : helmet()(req, res, next);
   });
   app.enableCors({ origin: false });
 

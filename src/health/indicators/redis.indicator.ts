@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   HealthIndicatorResult,
   HealthIndicatorService,
@@ -14,6 +14,8 @@ import { RedisService } from '../../redis/redis.service';
  */
 @Injectable()
 export class RedisHealthIndicator {
+  private readonly logger = new Logger(RedisHealthIndicator.name);
+
   public constructor(
     private readonly healthIndicatorService: HealthIndicatorService,
     private readonly redis: RedisService,
@@ -26,8 +28,13 @@ export class RedisHealthIndicator {
       await this.redis.ping();
       return indicator.up({ responseTimeMs: Date.now() - start });
     } catch (err) {
+      // /ready is unauthenticated — same rule as the Postgres
+      // indicator: no raw driver error strings in the response body.
+      this.logger.error(
+        `Redis readiness probe failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return indicator.down({
-        message: err instanceof Error ? err.message : 'unknown error',
+        message: 'cache unreachable',
         responseTimeMs: Date.now() - start,
       });
     }

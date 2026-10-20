@@ -32,13 +32,16 @@ import { UserPrincipal } from '../../domain/value-objects/user-principal';
  *   3. Verify the token via `JwtSignerService.verifyAccessToken`. The
  *      service validates signature, issuer, audience, and expiry.
  *      Any failure → 401 `authentication.token.invalid`.
- *   4. Build a `UserPrincipal` from the JWT claims:
+ *   4. V1.7 (audit H-3): reject `typ: 'app'` tokens — app-bound
+ *      tokens are never valid user principals (see
+ *      `IssueClientCredentialsAccessTokenUseCase`).
+ *   5. Build a `UserPrincipal` from the JWT claims:
  *      - `sub` → `userId`
  *      - `org` → `organizationSlug` (nullable)
  *      - `role` → `role` (nullable)
  *      - `scope` → `scopes` (split by space, OAuth2 standard)
  *      - `exp` → `expiresAt` (Date)
- *   5. Attach as `req.user`.
+ *   6. Attach as `req.user`.
  *
  * The guard is deliberately stateless — it does NOT hit the database
  * to confirm the user still exists. JWT expiry + signing-key rotation
@@ -97,6 +100,17 @@ export class JwtAuthGuard implements CanActivate {
       throw new DomainError(
         'authorization.token.invalid',
         'JWT verification failed',
+      );
+    }
+
+    // V1.7 (audit H-3): app-bound tokens (client_credentials,
+    // `typ: 'app'`, `sub = appId`) must never authenticate as a
+    // user principal on REST routes — even one whose attacker-chosen
+    // scope list happens to satisfy the route's `@Scopes()` check.
+    if (payload.typ === 'app') {
+      throw new DomainError(
+        'authorization.token.invalid',
+        'App tokens are not accepted as user credentials',
       );
     }
 

@@ -30,6 +30,17 @@ export class TokenRequestDto {
   @IsString()
   public password?: string;
 
+  /**
+   * Optional inline MFA code (grant_type=password, 2026-10-19 audit
+   * fix C1). A valid 6-digit TOTP code completes MFA in one
+   * round-trip; without it an MFA-enabled account gets 403
+   * `mfa_required` + `mfa_token` instead of tokens. Documented
+   * non-standard extension of RFC 6749 §4.3.
+   */
+  @IsOptional()
+  @IsString()
+  public mfa_code?: string;
+
   // refresh_token (for grant_type=refresh_token)
   @IsOptional()
   @IsString()

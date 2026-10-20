@@ -15,6 +15,13 @@ import { AuditEventType } from '../value-objects/audit-event-type';
 export class AuditLog {
   private constructor(
     public readonly id: string,
+    /**
+     * V1.8 audit fix H-10: id of the originating domain event when
+     * this row came from an event handler; null for direct writes.
+     * Enforced unique per `eventType` at the DB so outbox
+     * re-publishes don't duplicate rows.
+     */
+    public readonly eventId: string | null,
     public readonly userId: string | null,
     public readonly eventType: AuditEventType,
     public readonly payload: Readonly<Record<string, unknown>>,
@@ -25,6 +32,7 @@ export class AuditLog {
 
   public static create(params: {
     id: string;
+    eventId?: string | null;
     userId: string | null;
     eventType: AuditEventType;
     payload: Readonly<Record<string, unknown>>;
@@ -32,10 +40,17 @@ export class AuditLog {
     userAgent: string | null;
     clock: Clock;
   }): AuditLog {
-    if (!params.userId && params.eventType.value.startsWith('identity.')) {
-      // Identity events must always have a user. Other events (e.g.
-      // `engagement.password_reset.requested`) may legitimately have a
-      // null user when the request hasn't been authenticated yet.
+    // Identity events must always have a user — EXCEPT
+    // `identity.registration.duplicate`, which by construction has no
+    // user: the email is taken, so no row was created and nobody
+    // authenticated. Other events (e.g. `engagement.password_reset.requested`)
+    // may legitimately have a null user when the request hasn't been
+    // authenticated yet.
+    if (
+      !params.userId &&
+      params.eventType.value.startsWith('identity.') &&
+      params.eventType.value !== 'identity.registration.duplicate'
+    ) {
       throw new DomainError(
         'domain.invariant_violation',
         'Identity audit events must reference a userId',
@@ -43,6 +58,7 @@ export class AuditLog {
     }
     return new AuditLog(
       params.id,
+      params.eventId ?? null,
       params.userId,
       params.eventType,
       params.payload,
@@ -54,6 +70,7 @@ export class AuditLog {
 
   public static fromPersistence(params: {
     id: string;
+    eventId?: string | null;
     userId: string | null;
     eventType: AuditEventType;
     payload: Readonly<Record<string, unknown>>;
@@ -63,6 +80,7 @@ export class AuditLog {
   }): AuditLog {
     return new AuditLog(
       params.id,
+      params.eventId ?? null,
       params.userId,
       params.eventType,
       params.payload,

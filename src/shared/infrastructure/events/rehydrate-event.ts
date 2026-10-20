@@ -22,6 +22,26 @@ import {
   MfaEnrollmentStarted,
   PasswordChanged,
 } from '../../../identity/domain/events/identity.events';
+import {
+  decryptAead,
+  getOutboxAeadKey,
+  isAeadCiphertext,
+} from '../crypto/aead.util';
+
+/**
+ * V1.8 audit fix C3: tokens written after the fix are AES-256-GCM
+ * ciphertexts (`v1:<iv>:<tag>:<ct>`). Rows written before it are
+ * still plaintext — pass those through for the length of one token
+ * TTL so outstanding links keep working, and default to '' when the
+ * field is absent (MailSenderDispatcher ignores empty plaintexts).
+ */
+function decryptTokenField(value: unknown): string {
+  const raw = (value as string) ?? '';
+  if (!isAeadCiphertext(raw)) {
+    return raw;
+  }
+  return decryptAead(raw, getOutboxAeadKey());
+}
 
 /**
  * Rehydrates a `DomainEvent` from a JSON payload produced by
@@ -149,10 +169,7 @@ export function rehydrateEvent(payload: {
         occurredAt,
         payload.userId as string,
         payload.verificationId as string,
-        // Plaintext token was in the original event. On rehydrate
-        // the relay re-publishes; MailSenderDispatcher ignores
-        // missing/empty plaintexts (logged once).
-        (payload.plaintextToken as string) ?? '',
+        decryptTokenField(payload.plaintextToken),
       );
     }
     case 'engagement.email_verification.completed': {
@@ -169,7 +186,7 @@ export function rehydrateEvent(payload: {
         occurredAt,
         payload.userId as string,
         payload.resetId as string,
-        (payload.plaintextToken as string) ?? '',
+        decryptTokenField(payload.plaintextToken),
       );
     }
     case 'engagement.password_reset.completed': {

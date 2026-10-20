@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import {
   CLOCK,
   Clock,
@@ -41,6 +42,7 @@ import {
 } from '../../../identity/domain/ports/user.repository.port';
 import { OrgId } from '../../../identity/domain/value-objects/org-id';
 import { OrgSlug } from '../../../identity/domain/value-objects/org-slug';
+import { TotpService } from '../../../identity/infrastructure/security/totp.service';
 import { Session } from '../../domain/aggregates/session';
 import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import {
@@ -64,6 +66,7 @@ import {
   REFRESH_TOKEN_GENERATOR,
   RefreshTokenGenerator,
 } from '../../infrastructure/security/refresh-token-generator';
+import { MintMfaPendingTokenUseCase } from './mint-mfa-pending-token.use-case';
 
 export interface LoginInput {
   email: string;
@@ -80,11 +83,34 @@ export interface LoginInput {
    * is scoped to the user's first org.
    */
   appDefaultOrgSlug?: string | null;
+  /**
+   * 2026-10-19 audit fix C1: optional inline second factor. When the
+   * user has MFA enabled and supplies a valid 6-digit TOTP code here,
+   * the login completes in one round-trip: the session is created
+   * MFA-verified and the normal token pair is returned. An invalid
+   * code throws `identity.mfa.code_invalid` — the password has
+   * already been verified at that point, so this leaks nothing about
+   * the credential.
+   */
+  mfaCode?: string;
 }
 
 export interface LoginResult {
-  /** Plaintext refresh token. Returned ONLY at issuance; never stored. */
-  refreshToken: string;
+  /**
+   * Plaintext refresh token. Returned ONLY at issuance; never stored.
+   * Null when the login is MFA-pending — no refresh token exists
+   * until the second factor completes (audit fix C1: a usable refresh
+   * token in the mfaRequired response let a password-only attacker
+   * bypass MFA via /v1/auth/refresh).
+   */
+  refreshToken: string | null;
+  /**
+   * 2026-10-19 audit fix C1: scoped JWT (scope `mfa:verify`) returned
+   * ONLY when mfaRequired is true. Carries sub=userId + sid=sessionId
+   * and is the credential the client presents to
+   * POST /v1/identity/mfa/verify. Null otherwise.
+   */
+  mfaToken: string | null;
   sessionId: string;
   userId: string;
   familyId: string;
@@ -99,23 +125,48 @@ const LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60; // 15-minute sliding window
 const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 /**
- * First-factor login (email + password).
+ * 2026-10-19 audit fix H-8: account-wide lockout. 10 failed attempts
+ * against one email from ANY IPs within 15 minutes locks the account
+ * for 15 minutes. The per-(email, ip) LockoutPolicy tiers still apply
+ * on top (a single-IP attacker trips those at 5 failures first).
+ */
+const ACCOUNT_LOCK_THRESHOLD = 10;
+const ACCOUNT_LOCK_WINDOW_SECONDS = 15 * 60;
+const ACCOUNT_LOCK_SECONDS = 15 * 60;
+
+/**
+ * 2026-10-19 audit fix H-12: cap MFA-pending challenge issuances at
+ * 10 per email per hour. Each issuance is positive confirmation that
+ * the password is correct, so without a cap the mfaRequired response
+ * is a password-validation oracle (and hands out session ids).
+ */
+const MFA_PENDING_ISSUANCE_LIMIT = 10;
+const MFA_PENDING_WINDOW_SECONDS = 60 * 60;
+
+/**
+ * First-factor login (email + password), with optional inline second
+ * factor.
  *
- * On success: creates a new Session, persists it, returns the plaintext
- * refresh token (one-time; never persisted). The caller is expected to
- * immediately exchange the refresh token for an access token (Phase 13).
+ * On success (no MFA, or inline mfaCode valid): creates a new Session,
+ * persists it, returns the plaintext refresh token (one-time; never
+ * persisted) and an access token is minted by the caller.
  *
- * On failure: increments the login-attempt counter in Redis, evaluates
+ * On success with MFA pending: creates the Session with
+ * mfaVerified=false, returns `{ mfaRequired: true, mfaToken,
+ * sessionId }` — NO refresh token. The mfaToken is the scoped JWT
+ * the client exchanges at POST /v1/identity/mfa/verify.
+ *
+ * On failure: increments the login-attempt counters in Redis, evaluates
  * the lockout policy, and may lock the credential for an exponentially
- * growing window. The error message returned to the user is intentionally
- * identical for "user not found", "wrong password", and "locked" — to
- * avoid leaking account existence.
+ * growing window. The error message returned to the user is
+ * intentionally identical for "user not found", "wrong password", and
+ * "locked" — to avoid leaking account existence.
  *
  * Atomicity: the session creation + the credential-unlock happen in a
- * single transaction. The Redis login-attempt counter is updated either
- * before (for failures) or after (for successes — clearing the counter)
- * the transaction; it's not part of the ACID boundary because Redis
- * isn't transactional with Postgres.
+ * single transaction. The Redis login-attempt counters are updated
+ * either before (for failures) or after (for successes — clearing the
+ * counters) the transaction; they're not part of the ACID boundary
+ * because Redis isn't transactional with Postgres.
  */
 @Injectable()
 export class LoginUseCase {
@@ -142,6 +193,8 @@ export class LoginUseCase {
     private readonly recordAuditEventUc: RecordAuditEventUseCase,
     @Inject(MFA_SECRET_REPOSITORY)
     private readonly mfaSecretRepo: MfaSecretRepository,
+    private readonly totp: TotpService,
+    private readonly mintMfaPendingTokenUc: MintMfaPendingTokenUseCase,
   ) {}
 
   public async execute(input: LoginInput): Promise<LoginResult> {
@@ -154,7 +207,9 @@ export class LoginUseCase {
     const ipValue = input.ipAddress ?? '0.0.0.0';
     const ip = IpAddress.create(ipValue);
 
-    // Pre-check: is the account already locked?
+    // Pre-check: is the account already locked? Two independent checks:
+    //   1. per-(email, ip) sliding window → LockoutPolicy tiers
+    //   2. per-email any-IP cumulative window (H-8) → fixed 15-min lock
     const currentWindow = await this.loginAttemptRepo.getWindow(
       normalizedEmail,
       ip.value,
@@ -162,6 +217,13 @@ export class LoginUseCase {
       LOGIN_FAILURE_WINDOW_SECONDS,
     );
     assertNotLocked(this.lockoutPolicy, currentWindow, this.clock.now());
+
+    const accountWindow = await this.loginAttemptRepo.getAccountWindow(
+      normalizedEmail,
+      this.clock.now(),
+      ACCOUNT_LOCK_WINDOW_SECONDS,
+    );
+    this.assertAccountNotLocked(accountWindow);
 
     // Look up the user + credential atomically.
     const lookup = await this.txRunner.run<{
@@ -268,6 +330,46 @@ export class LoginUseCase {
           { lockedUntil: until.toISOString() },
         );
       }
+
+      // H-8: distributed lockout — 10 failures against this email from
+      // ANY IPs within 15 minutes locks the account 15 minutes. A
+      // single-IP attacker already tripped the tier lock above at 5;
+      // this path catches the IP-rotating brute-forcer.
+      const accountFailures = await this.recordAccountFailure(normalizedEmail);
+      if (accountFailures !== null) {
+        const until = new Date(
+          this.clock.now().getTime() + ACCOUNT_LOCK_SECONDS * 1000,
+        );
+        const updatedCred = credential.lockUntil(this.clock, until);
+        await this.txRunner.run(async (tx: Tx) => {
+          await this.credentialRepo.save(tx, updatedCred);
+        });
+        await this.recordAuditEventUc.execute({
+          userId: user.id.value,
+          eventType: 'authentication.account.locked',
+          payload: {
+            reason: 'account_wide_threshold',
+            failureCount: accountFailures,
+            lockedUntil: until.toISOString(),
+            ipAddress: ip.value,
+          },
+          ipAddress: ip.value,
+        });
+        await this.recordAuditEventUc.execute({
+          userId: user.id.value,
+          eventType: 'identity.account.locked',
+          payload: {
+            reason: 'account_wide_threshold',
+            lockedUntil: until.toISOString(),
+          },
+        });
+        throw new DomainError(
+          'authentication.account_locked',
+          'Account temporarily locked due to repeated failed login attempts',
+          { lockedUntil: until.toISOString() },
+        );
+      }
+
       throw new DomainError(
         'authentication.invalid_credentials',
         'Invalid email or password',
@@ -283,13 +385,61 @@ export class LoginUseCase {
       );
     }
 
-    // Successful login — clear the failure window, unlock the credential.
+    // Successful password — clear both failure windows and unlock the
+    // credential happens in the tx below. H-8: the per-email any-IP
+    // window is cleared here too, otherwise a user who recovers their
+    // password stays one distributed burst away from another lock.
     await this.loginAttemptRepo.clear(normalizedEmail, ip.value);
+    await this.loginAttemptRepo.clearAccount(normalizedEmail);
 
     // Determine if MFA is required. We do this by checking whether a
     // confirmed MfaSecret exists. (V1.5: handle the case where the user
     // has MFA but the second-factor verification hasn't completed yet.)
     const requiresMfa = await this.requiresMfa(user.id);
+
+    // Audit fix C1: inline second factor. A valid TOTP code supplied
+    // with the password completes the login in one round-trip.
+    let mfaSatisfied = !requiresMfa;
+    if (requiresMfa && input.mfaCode !== undefined && input.mfaCode !== '') {
+      const ok = await this.verifyInlineMfa(user.id, input.mfaCode);
+      if (!ok) {
+        throw new DomainError(
+          'identity.mfa.code_invalid',
+          'Provided MFA code is invalid',
+        );
+      }
+      mfaSatisfied = true;
+    }
+    const mfaRequired = requiresMfa && !mfaSatisfied;
+
+    // H-12: throttle MFA-pending issuances. Each one is proof the
+    // password was correct, so unbounded issuance is a
+    // password-validation oracle. Over the limit → generic 401
+    // (identical to a wrong password) + audit.
+    if (mfaRequired) {
+      const issuances = await this.loginAttemptRepo.recordMfaPendingIssuance(
+        normalizedEmail,
+        this.clock.now(),
+        MFA_PENDING_WINDOW_SECONDS,
+      );
+      if (issuances > MFA_PENDING_ISSUANCE_LIMIT) {
+        await this.recordAuditEventUc.execute({
+          userId: user.id.value,
+          eventType: 'authentication.login.throttled',
+          payload: {
+            reason: 'mfa_pending_issuance_limit',
+            issuanceCount: issuances,
+            emailFingerprint: fingerprintEmail(normalizedEmail),
+            ipAddress: ip.value,
+          },
+          ipAddress: ip.value,
+        });
+        throw new DomainError(
+          'authentication.invalid_credentials',
+          'Invalid email or password',
+        );
+      }
+    }
 
     // Mint session + persist.
     const userAgent = input.userAgent
@@ -316,10 +466,10 @@ export class LoginUseCase {
       ttlSeconds: REFRESH_TOKEN_TTL_SECONDS,
       // V1.5 (audit C-4): when the user has MFA enabled, the session
       // is created with mfaVerified=false. The user must call
-      // POST /v1/identity/mfa/verify before the OAuth password grant
-      // will mint an access token. Without this, a stolen password
-      // alone is enough to mint a JWT (audit C-4).
-      requiresMfa,
+      // POST /v1/identity/mfa/verify (presenting the mfaToken) before
+      // any refresh/access token will be minted. When the inline
+      // mfaCode was already verified, the session starts verified.
+      requiresMfa: !mfaSatisfied,
     });
 
     const saved = await this.txRunner.run<{ session: Session }>(
@@ -337,7 +487,7 @@ export class LoginUseCase {
           this.clock.now(),
           persisted.id,
           persisted.userId,
-          requiresMfa,
+          mfaRequired,
         );
         await this.outbox.append(tx, event);
         return { session: persisted };
@@ -351,19 +501,106 @@ export class LoginUseCase {
       payload: {
         sessionId: saved.session.id.value,
         organizationSlug: saved.session.organizationId?.value ?? null,
-        mfaRequired: requiresMfa,
+        mfaRequired,
       },
     });
 
+    let mfaToken: string | null = null;
+    if (mfaRequired) {
+      // Audit fix C1: record that this session is parked awaiting MFA
+      // and mint the scoped pending token. No refresh token leaves
+      // the use-case on this path.
+      await this.recordAuditEventUc.execute({
+        userId: saved.session.userId.value,
+        eventType: 'authentication.mfa.required',
+        payload: {
+          sessionId: saved.session.id.value,
+          outcome: 'pending_token_issued',
+        },
+      });
+      mfaToken = await this.mintMfaPendingTokenUc.execute({
+        userId: saved.session.userId.value,
+        sessionId: saved.session.id.value,
+      });
+    }
+
     return {
-      refreshToken: plaintextRefresh,
+      refreshToken: mfaRequired ? null : plaintextRefresh,
+      mfaToken,
       sessionId: saved.session.id.value,
       userId: saved.session.userId.value,
       familyId: saved.session.familyId,
       expiresAt: saved.session.expiresAt,
       organizationId: saved.session.organizationId?.value ?? null,
-      mfaRequired: requiresMfa,
+      mfaRequired,
     };
+  }
+
+  /**
+   * H-8 pre-check: throw when the per-email any-IP window has reached
+   * the account-lock threshold within its window.
+   */
+  private assertAccountNotLocked(window: {
+    count: number;
+    lastFailureAt: Date | null;
+  }): void {
+    if (
+      window.count < ACCOUNT_LOCK_THRESHOLD ||
+      window.lastFailureAt === null
+    ) {
+      return;
+    }
+    const until = new Date(
+      window.lastFailureAt.getTime() + ACCOUNT_LOCK_SECONDS * 1000,
+    );
+    if (until.getTime() <= this.clock.now().getTime()) {
+      return;
+    }
+    throw new DomainError(
+      'authentication.account_locked',
+      'Account temporarily locked due to repeated failed login attempts',
+      { lockedUntil: until.toISOString() },
+    );
+  }
+
+  /**
+   * H-8: record the failure in the per-email any-IP bucket. Returns
+   * the resulting failure count when it has reached the account-lock
+   * threshold (the caller locks the credential), null otherwise.
+   */
+  private async recordAccountFailure(email: string): Promise<number | null> {
+    const window = await this.loginAttemptRepo.recordAccountFailure(
+      email,
+      this.clock.now(),
+      ACCOUNT_LOCK_WINDOW_SECONDS,
+    );
+    if (window.count < ACCOUNT_LOCK_THRESHOLD) {
+      return null;
+    }
+    return window.count;
+  }
+
+  /**
+   * Audit fix C1: verify an inline 6-digit TOTP code against the
+   * user's confirmed MFA secret, using the same TotpService the
+   * dedicated verify endpoint uses (workstream B2 hardens that
+   * service; both paths share it).
+   */
+  private async verifyInlineMfa(
+    userId: UserId,
+    code: string,
+  ): Promise<boolean> {
+    const trimmed = code.trim();
+    if (!/^\d{6}$/.test(trimmed)) {
+      return false;
+    }
+    const secret = await this.txRunner.run(async (tx: Tx) =>
+      this.mfaSecretRepo.findById(tx, userId),
+    );
+    if (!secret || !secret.confirmed) {
+      return false;
+    }
+    return secret.verifyTotpCode(trimmed, (s, c) => this.totp.verifyTotp(s, c));
   }
 
   private async recordFailure(email: string, ip: string): Promise<void> {
@@ -375,11 +612,17 @@ export class LoginUseCase {
     );
     // Audit: authentication.login.failed. userId is null because we
     // don't know if the email corresponds to a real user (no
-    // enumeration leak in audit log either).
+    // enumeration leak in audit log either). The plaintext email is
+    // NOT persisted (2026-10-19 audit MEDIUM): only a truncated
+    // sha-256 fingerprint, matching the throttle guard's emailHash
+    // convention, plus the IP.
     await this.recordAuditEventUc.execute({
       userId: null,
       eventType: 'authentication.login.failed',
-      payload: { email, ipAddress: ip },
+      payload: {
+        emailFingerprint: fingerprintEmail(email),
+        ipAddress: ip,
+      },
       ipAddress: ip,
     });
   }
@@ -448,4 +691,16 @@ export class LoginUseCase {
       return membership.organizationId;
     });
   }
+}
+
+/**
+ * Truncated sha-256 of the normalized email — the same fingerprint
+ * convention as ThrottleGuard.hashEmail. Lets security correlate
+ * failed-login bursts across IPs without persisting PII.
+ */
+function fingerprintEmail(email: string): string {
+  return createHash('sha256')
+    .update(email.toLowerCase(), 'utf8')
+    .digest('hex')
+    .slice(0, 16);
 }

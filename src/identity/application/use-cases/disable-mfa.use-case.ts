@@ -55,10 +55,16 @@ export class DisableMfaUseCase {
         );
       }
 
-      // Verify the user has a working authenticator before turning MFA off.
-      if (
-        !mfa.verifyTotpCode(input.code, (s, c) => this.totp.verifyTotp(s, c))
-      ) {
+      // Verify the user has a working authenticator before turning MFA
+      // off. 2026-10-19 audit MEDIUM: use the replay-protected
+      // verifier (claims the time step in Redis) so a captured code
+      // can't be replayed to disable MFA within its validity window.
+      const fresh = await this.totp.verifyTotpFresh(
+        userId.value,
+        mfa.secret,
+        input.code,
+      );
+      if (!fresh) {
         throw new DomainError(
           'identity.mfa.code_invalid',
           'Provided TOTP code does not match',

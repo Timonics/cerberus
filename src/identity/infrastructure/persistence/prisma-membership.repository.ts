@@ -33,8 +33,14 @@ export class PrismaMembershipRepository extends MembershipRepository {
     userId: UserId,
   ): Promise<Membership | null> {
     const client = tx as PrismaTx;
+    // 2026-10-19: users can now hold MULTIPLE memberships (personal org
+    // + an org joined via verified email domain). V1 callers resolve
+    // "the user's org" through this method, so it must deterministically
+    // return the FIRST-CREATED membership — the personal-org one —
+    // rather than an arbitrary row.
     const row = await client.membership.findFirst({
       where: { userId: userId.value },
+      orderBy: { createdAt: 'asc' },
     });
     return row ? this.toDomain(row) : null;
   }

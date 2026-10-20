@@ -1,13 +1,13 @@
 {
   "info": {
-    "_postman_id": "cerberus-av5bxowqx",
+    "_postman_id": "cerberus-8spqfi7yx",
     "name": "Cerberus",
     "description": "Full REST + GraphQL surface for the Cerberus auth service.\n\n**Setup**\n1. Import `Cerberus.dev.postman_environment.json`.\n2. Set `baseUrl` to your running server (default `http://localhost:3000`).\n3. Run `OAuth2 > POST /v1/oauth/token — password grant` — the test script auto-saves the bearer token into the env.\n\n**Conventions**\n- Every authenticated REST endpoint expects `Authorization: Bearer {{bearerToken}}`.\n- Phase-11 placeholder endpoints (change-password, MFA, audit-log/me, update-display-name) expect `Authorization: {{userId}}` instead.\n- TOTP codes are auto-computed by the prerequest script of `/mfa/confirm`, `/mfa/disable`, `/mfa/verify`, and the GraphQL MFA mutations.\n- GraphQL endpoints all hit `POST /graphql`; the request body is a `{query, variables}` envelope.\n- Error responses include `code` (REST) or `extensions.code` (GraphQL) with stable strings — switch on those in client code.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "id": "ougmim58q",
+      "id": "6muimkpcv",
       "name": "Health",
       "description": "",
       "item": [
@@ -78,12 +78,12 @@
       ]
     },
     {
-      "id": "n5uzzhh4u",
+      "id": "vd9budct8",
       "name": "Auth",
       "description": "",
       "item": [
         {
-          "id": "ll8ok70xv",
+          "id": "jryubhmwm",
           "name": "Public",
           "description": "",
           "item": [
@@ -120,7 +120,7 @@
                 "auth": {
                   "type": "noauth"
                 },
-                "description": "Authenticate with email + password. Returns a sessionId and familyId for the new session."
+                "description": "Authenticate with email + password. Returns a sessionId and familyId for the new session. MFA-enabled users: omit mfaCode to get the MFA-pending response {mfaRequired:true, mfaToken, sessionId} (complete it via POST /v1/identity/mfa/verify), or pass a 6-digit mfaCode to finish in one round-trip."
               },
               "event": [
                 {
@@ -135,15 +135,25 @@
                       "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
                       "}",
                       "const json = pm.response.json();",
-                      "if (json.access_token) {",
-                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
-                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "// REST endpoints return camelCase; the OAuth2 token endpoint returns",
+                      "// RFC 6749 snake_case. Accept both.",
+                      "const accessToken = json.accessToken ?? json.access_token;",
+                      "const refreshToken = json.refreshToken ?? json.refresh_token;",
+                      "if (accessToken) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", accessToken);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expiresIn ?? json.expires_in);",
                       "}",
-                      "if (json.refresh_token) {",
-                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "if (refreshToken) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
                       "}",
-                      "pm.collectionVariables.set(\"currentSessionId\", pm.response.json().sessionId);",
-                      "pm.collectionVariables.set(\"currentFamilyId\", pm.response.json().familyId);"
+                      "const j = pm.response.json();",
+                      "pm.collectionVariables.set(\"currentSessionId\", j.sessionId);",
+                      "pm.collectionVariables.set(\"currentFamilyId\", j.familyId);",
+                      "// MFA-pending contract (V1.7): no tokens, but an mfaToken + sessionId.",
+                      "if (j.mfaRequired) {",
+                      "  pm.collectionVariables.set(\"mfaToken\", j.mfaToken);",
+                      "  pm.collectionVariables.set(\"mfaSessionId\", j.sessionId);",
+                      "}"
                     ]
                   }
                 }
@@ -197,12 +207,16 @@
                       "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
                       "}",
                       "const json = pm.response.json();",
-                      "if (json.access_token) {",
-                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
-                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "// REST endpoints return camelCase; the OAuth2 token endpoint returns",
+                      "// RFC 6749 snake_case. Accept both.",
+                      "const accessToken = json.accessToken ?? json.access_token;",
+                      "const refreshToken = json.refreshToken ?? json.refresh_token;",
+                      "if (accessToken) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", accessToken);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expiresIn ?? json.expires_in);",
                       "}",
-                      "if (json.refresh_token) {",
-                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "if (refreshToken) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
                       "}"
                     ]
                   }
@@ -264,7 +278,7 @@
           ]
         },
         {
-          "id": "pdos34voy",
+          "id": "jx1qysego",
           "name": "Sessions (V1: Authorization placeholder)",
           "description": "",
           "item": [
@@ -383,7 +397,7 @@
       ]
     },
     {
-      "id": "m30dlltz8",
+      "id": "vyw413iw3",
       "name": "OAuth2 (RFC 6749 / 7662 / 7009)",
       "description": "",
       "item": [
@@ -435,12 +449,16 @@
                   "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
                   "}",
                   "const json = pm.response.json();",
-                  "if (json.access_token) {",
-                  "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
-                  "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                  "// REST endpoints return camelCase; the OAuth2 token endpoint returns",
+                  "// RFC 6749 snake_case. Accept both.",
+                  "const accessToken = json.accessToken ?? json.access_token;",
+                  "const refreshToken = json.refreshToken ?? json.refresh_token;",
+                  "if (accessToken) {",
+                  "  pm.collectionVariables.set(\"bearerToken\", accessToken);",
+                  "  pm.collectionVariables.set(\"expiresIn\", json.expiresIn ?? json.expires_in);",
                   "}",
-                  "if (json.refresh_token) {",
-                  "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                  "if (refreshToken) {",
+                  "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
                   "}"
                 ]
               }
@@ -495,12 +513,16 @@
                   "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
                   "}",
                   "const json = pm.response.json();",
-                  "if (json.access_token) {",
-                  "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
-                  "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                  "// REST endpoints return camelCase; the OAuth2 token endpoint returns",
+                  "// RFC 6749 snake_case. Accept both.",
+                  "const accessToken = json.accessToken ?? json.access_token;",
+                  "const refreshToken = json.refreshToken ?? json.refresh_token;",
+                  "if (accessToken) {",
+                  "  pm.collectionVariables.set(\"bearerToken\", accessToken);",
+                  "  pm.collectionVariables.set(\"expiresIn\", json.expiresIn ?? json.expires_in);",
                   "}",
-                  "if (json.refresh_token) {",
-                  "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                  "if (refreshToken) {",
+                  "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
                   "}"
                 ]
               }
@@ -690,12 +712,12 @@
       ]
     },
     {
-      "id": "83w4ht8sp",
+      "id": "yh0wbqhah",
       "name": "Identity",
       "description": "",
       "item": [
         {
-          "id": "jiuwbt6i0",
+          "id": "jxpb0x02b",
           "name": "Public",
           "description": "",
           "item": [
@@ -758,7 +780,7 @@
           ]
         },
         {
-          "id": "kaxl4qgjh",
+          "id": "2wjlplotc",
           "name": "Authenticated (Bearer JWT — V1.5)",
           "description": "",
           "item": [
@@ -1164,7 +1186,7 @@
                 "header": [
                   {
                     "key": "Authorization",
-                    "value": "{{userId}}"
+                    "value": "Bearer {{mfaToken}}"
                   },
                   {
                     "key": "Content-Type",
@@ -1173,7 +1195,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"code\": \"{{totpCode}}\"\n}",
+                  "raw": "{\n  \"sessionId\": \"{{mfaSessionId}}\",\n  \"code\": \"{{totpCode}}\"\n}",
                   "options": {
                     "language": {
                       "json": {}
@@ -1195,7 +1217,7 @@
                 "auth": {
                   "type": "noauth"
                 },
-                "description": "Verify a TOTP or recovery code. Returns {matched: \"totp\" | \"recovery\"}."
+                "description": "Complete the pending second factor for an MFA-enabled login. Body: {sessionId, code} where sessionId comes from the MFA-pending login response (captured as {{mfaSessionId}}). Post-C1 contract: returns the real token pair {accessToken, refreshToken, mfaVerified:true} on success."
               },
               "event": [
                 {
@@ -1234,6 +1256,18 @@
                       "if (json && typeof json === \"object\") {",
                       "  const reqId = pm.response.headers.get(\"x-request-id\");",
                       "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
+                      "}",
+                      "const json = pm.response.json();",
+                      "// REST endpoints return camelCase; the OAuth2 token endpoint returns",
+                      "// RFC 6749 snake_case. Accept both.",
+                      "const accessToken = json.accessToken ?? json.access_token;",
+                      "const refreshToken = json.refreshToken ?? json.refresh_token;",
+                      "if (accessToken) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", accessToken);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expiresIn ?? json.expires_in);",
+                      "}",
+                      "if (refreshToken) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
                       "}"
                     ]
                   }
@@ -1245,12 +1279,12 @@
       ]
     },
     {
-      "id": "zvuldlxg0",
+      "id": "oljm7jnkr",
       "name": "Engagement",
       "description": "",
       "item": [
         {
-          "id": "u5wh6z5h5",
+          "id": "swduzt5ck",
           "name": "Public",
           "description": "",
           "item": [
@@ -1411,7 +1445,7 @@
           ]
         },
         {
-          "id": "2hovpatxi",
+          "id": "jd9hjqktz",
           "name": "Authenticated",
           "description": "",
           "item": [
@@ -1505,7 +1539,7 @@
       ]
     },
     {
-      "id": "gvlr9q7zs",
+      "id": "qi6egx7bl",
       "name": "GraphQL (POST /graphql)",
       "description": "",
       "item": [
@@ -2246,12 +2280,12 @@
       ]
     },
     {
-      "id": "9z18wh433",
+      "id": "ecla61m4p",
       "name": "Examples — chained flows",
       "description": "",
       "item": [
         {
-          "id": "tjzx54b9l",
+          "id": "3iv2g50hq",
           "name": "1. New user happy path",
           "description": "",
           "item": [
@@ -2350,15 +2384,25 @@
                       "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
                       "}",
                       "const json = pm.response.json();",
-                      "if (json.access_token) {",
-                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
-                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "// REST endpoints return camelCase; the OAuth2 token endpoint returns",
+                      "// RFC 6749 snake_case. Accept both.",
+                      "const accessToken = json.accessToken ?? json.access_token;",
+                      "const refreshToken = json.refreshToken ?? json.refresh_token;",
+                      "if (accessToken) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", accessToken);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expiresIn ?? json.expires_in);",
                       "}",
-                      "if (json.refresh_token) {",
-                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "if (refreshToken) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
                       "}",
-                      "pm.collectionVariables.set(\"currentSessionId\", pm.response.json().sessionId);",
-                      "pm.collectionVariables.set(\"currentFamilyId\", pm.response.json().familyId);"
+                      "const j = pm.response.json();",
+                      "pm.collectionVariables.set(\"currentSessionId\", j.sessionId);",
+                      "pm.collectionVariables.set(\"currentFamilyId\", j.familyId);",
+                      "// MFA-pending contract (V1.7): no tokens, but an mfaToken + sessionId.",
+                      "if (j.mfaRequired) {",
+                      "  pm.collectionVariables.set(\"mfaToken\", j.mfaToken);",
+                      "  pm.collectionVariables.set(\"mfaSessionId\", j.sessionId);",
+                      "}"
                     ]
                   }
                 }
@@ -2466,7 +2510,7 @@
           ]
         },
         {
-          "id": "vlef88taz",
+          "id": "8n267d12l",
           "name": "2. Password reset flow",
           "description": "",
           "item": [
@@ -2619,15 +2663,25 @@
                       "  if (reqId) pm.collectionVariables.set(\"lastRequestId\", reqId);",
                       "}",
                       "const json = pm.response.json();",
-                      "if (json.access_token) {",
-                      "  pm.collectionVariables.set(\"bearerToken\", json.access_token);",
-                      "  pm.collectionVariables.set(\"expiresIn\", json.expires_in);",
+                      "// REST endpoints return camelCase; the OAuth2 token endpoint returns",
+                      "// RFC 6749 snake_case. Accept both.",
+                      "const accessToken = json.accessToken ?? json.access_token;",
+                      "const refreshToken = json.refreshToken ?? json.refresh_token;",
+                      "if (accessToken) {",
+                      "  pm.collectionVariables.set(\"bearerToken\", accessToken);",
+                      "  pm.collectionVariables.set(\"expiresIn\", json.expiresIn ?? json.expires_in);",
                       "}",
-                      "if (json.refresh_token) {",
-                      "  pm.collectionVariables.set(\"refreshToken\", json.refresh_token);",
+                      "if (refreshToken) {",
+                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
                       "}",
-                      "pm.collectionVariables.set(\"currentSessionId\", pm.response.json().sessionId);",
-                      "pm.collectionVariables.set(\"currentFamilyId\", pm.response.json().familyId);"
+                      "const j = pm.response.json();",
+                      "pm.collectionVariables.set(\"currentSessionId\", j.sessionId);",
+                      "pm.collectionVariables.set(\"currentFamilyId\", j.familyId);",
+                      "// MFA-pending contract (V1.7): no tokens, but an mfaToken + sessionId.",
+                      "if (j.mfaRequired) {",
+                      "  pm.collectionVariables.set(\"mfaToken\", j.mfaToken);",
+                      "  pm.collectionVariables.set(\"mfaSessionId\", j.sessionId);",
+                      "}"
                     ]
                   }
                 }

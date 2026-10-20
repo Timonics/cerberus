@@ -44,6 +44,13 @@ import { rehydrateEvent } from './rehydrate-event';
  *   - Network/DB errors are logged and the row stays unprocessed
  *     — picked up on the next poll.
  */
+/**
+ * After N failed attempts the row is parked for operator review.
+ * Exported so the cleanup cron uses the SAME threshold when purging
+ * dead-lettered rows (V1.8 audit fix C3).
+ */
+export const OUTBOX_MAX_ATTEMPTS_BEFORE_DEAD = 10;
+
 @Injectable()
 export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OutboxRelay.name);
@@ -61,9 +68,6 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
 
   /** Polling interval. 1s gives a sub-second worst-case latency. */
   private static readonly POLL_INTERVAL_MS = 1_000;
-
-  /** After N failed attempts the row is parked for operator review. */
-  private static readonly MAX_ATTEMPTS_BEFORE_DEAD = 10;
 
   /** Cap on rows published per tick to keep the loop bounded. */
   private static readonly BATCH_SIZE = 50;
@@ -177,7 +181,7 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
     }
 
     for (const row of rows) {
-      if (row.attempts >= OutboxRelay.MAX_ATTEMPTS_BEFORE_DEAD) {
+      if (row.attempts >= OUTBOX_MAX_ATTEMPTS_BEFORE_DEAD) {
         // Parked — operator must reset `attempts` to retry.
         continue;
       }

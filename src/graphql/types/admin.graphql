@@ -47,14 +47,12 @@ type IssueAdminApiKeyPayload {
 
 input AdminDisableUserMfaInput {
   userId: ID!
-  """Optional admin key id for audit attribution (GraphQL callers usually leave this null)."""
-  adminKeyId: ID
   reason: String
 }
 
 type AdminDisableUserMfaPayload {
   userId: ID!
-  """The admin key that performed the disable. null when called via GraphQL with admin JWT (audit-log entry still recorded)."""
+  """Always null from GraphQL: JWT callers have no admin API key, and a caller-supplied value is never accepted (the audit row records the authenticated actor instead)."""
   adminKeyId: ID
   occurredAt: String!
 }
@@ -93,10 +91,10 @@ extend type Query {
   """List all admin API keys (live + revoked)."""
   adminApiKeys: [AdminApiKey!]!
 
-  """Look up a specific user as admin. Requires `org:admin` scope."""
+  """Look up a specific user as admin, restricted to the caller's organization. Requires `org:admin` scope."""
   adminUser(id: ID!): AdminUserView!
 
-  """Search the audit log across users / event types. `org:admin` scope required."""
+  """Search the audit log across users / event types, restricted to the caller's organization. `org:admin` scope required."""
   adminAuditLog(input: AdminAuditSearchInput!): [AuditLogEntry!]!
 }
 

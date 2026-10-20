@@ -48,12 +48,20 @@ import type { AppConfig } from '../../config/configuration';
             },
 
             // Never let secrets reach the log stream, in any environment.
+            // Audit 2026-10-19 H-9: the DTOs send TOTP/recovery codes in
+            // `code` / `mfaCode` / `mfa_code` and password changes in
+            // `currentPassword` / `newPassword` — all redacted here.
             redact: {
               paths: [
                 'req.headers.authorization',
                 'req.headers.cookie',
                 'req.headers["x-admin-api-key"]',
                 'req.body.password',
+                'req.body.currentPassword',
+                'req.body.newPassword',
+                'req.body.code',
+                'req.body.mfaCode',
+                'req.body.mfa_code',
                 'req.body.client_secret',
                 'req.body.refresh_token',
                 'req.body.token',

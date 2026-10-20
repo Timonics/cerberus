@@ -61,7 +61,10 @@ export function getRedis(): Redis {
 
 export async function resetRateLimits(): Promise<void> {
   const redis = getRedis();
-  const keys = await redis.keys('ratelimit:*');
+  // Must match the ThrottleGuard key prefix (`throttle:ip:…`,
+  // `throttle:email:…`, `throttle:user:…`) — the shared Redis-backed
+  // counters otherwise leak across suites and runs.
+  const keys = await redis.keys('throttle:*');
   if (keys.length > 0) await redis.del(...keys);
 }
 

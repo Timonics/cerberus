@@ -4,6 +4,7 @@ import { Tx } from '../../../shared/domain';
 import { DomainEvent } from '../../../shared/domain/events/domain-event';
 import { Outbox } from '../../../shared/domain/events/outbox.port';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { encryptAead, getOutboxAeadKey } from '../crypto/aead.util';
 
 type PrismaTx = Prisma.TransactionClient | PrismaClient;
 
@@ -107,6 +108,20 @@ export class PrismaOutbox extends Outbox {
       }
       payload[k] = v;
     }
+
+    // V1.8 audit fix C3: engagement "requested" events carry the
+    // plaintext verification/reset token for the mail sender.
+    // Persisting it here would put a live token in the same database
+    // as the (hashed) engagement tables — any DB backup or SQLi
+    // could replay the link. Encrypt at rest (AES-256-GCM, key
+    // derived from TOKEN_SECRET); rehydrate-event decrypts.
+    if (typeof payload['plaintextToken'] === 'string') {
+      payload['plaintextToken'] = encryptAead(
+        payload['plaintextToken'],
+        getOutboxAeadKey(),
+      );
+    }
+
     return payload;
   }
 }

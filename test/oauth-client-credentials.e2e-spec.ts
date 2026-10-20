@@ -132,10 +132,11 @@ describe('OAuth2 client_credentials grant (integration)', () => {
 
   it('mints an app-bound JWT with typ:"app" + scope downgraded to allowlist', async () => {
     // Register with two allowed scopes; ask for three; expect only
-    // the intersection to be granted.
+    // the intersection to be granted. (Post-H-3 scopes come from the
+    // server-side registry: app:register / app:auth / app:read.)
     const { appId, plaintextApiKey } = await registerApp({
       name: `cc-allow-${Date.now()}`,
-      initialScopes: 'payments:read,payments:write',
+      initialScopes: 'app:read,app:auth',
     });
 
     const res = await request(app.getHttpServer())
@@ -145,15 +146,15 @@ describe('OAuth2 client_credentials grant (integration)', () => {
         grant_type: 'client_credentials',
         client_id: appId,
         client_secret: plaintextApiKey,
-        scope: 'payments:read payments:write escrows:release',
+        scope: 'app:read app:auth escrows:release',
       });
 
     expect(res.status).toBe(200);
     expect(res.body.token_type).toBe('Bearer');
     expect(typeof res.body.expires_in).toBe('number');
-    // Downgraded to the intersection (the third scope is not in
-    // the allowlist).
-    expect(res.body.scope).toBe('payments:read payments:write');
+    // Downgraded to the intersection (the third scope is not in the
+    // allowlist).
+    expect(res.body.scope).toBe('app:read app:auth');
     // No refresh_token in the response — apps re-mint.
     expect(res.body.refresh_token).toBeUndefined();
     expect(typeof res.body.access_token).toBe('string');
@@ -164,8 +165,38 @@ describe('OAuth2 client_credentials grant (integration)', () => {
     expect(payload.sub).toBe(appId);
     expect(payload.appId).toBe(appId);
     expect(payload.role).toBeNull();
-    expect(payload.scope).toBe('payments:read payments:write');
+    expect(payload.scope).toBe('app:read app:auth');
     expect(payload.org).toBeNull();
+  });
+
+  it('rejects registration with a scope outside the server-side registry (H-3)', async () => {
+    // A user-scope must never be persistable on an app — otherwise
+    // the client_credentials grant would self-grant it. Registration
+    // now rejects unknown scopes with 400 app.scope.invalid.
+    const res = await request(app.getHttpServer())
+      .post('/v1/apps')
+      .send({
+        name: `cc-badscope-${Date.now()}`,
+        contactEmail: 'badscope@cerberus.local',
+        defaultOrgSlug: null,
+        ttlSeconds: 3600,
+        initialScopes: 'org:admin',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('app.scope.invalid');
+
+    // A made-up scope is rejected the same way.
+    const res2 = await request(app.getHttpServer())
+      .post('/v1/apps')
+      .send({
+        name: `cc-badscope2-${Date.now()}`,
+        contactEmail: 'badscope2@cerberus.local',
+        defaultOrgSlug: null,
+        ttlSeconds: 3600,
+        initialScopes: 'app:reads',
+      });
+    expect(res2.status).toBe(400);
+    expect(res2.body.code).toBe('app.scope.invalid');
   });
 
   it('mints a tenant-bound JWT when the App has a defaultOrgSlug', async () => {
@@ -177,7 +208,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
     const { appId, plaintextApiKey } = await registerApp({
       name: `cc-tenant-${Date.now()}`,
       defaultOrgSlug: orgSlug,
-      initialScopes: 'payments:read',
+      initialScopes: 'app:read',
     });
 
     const res = await request(app.getHttpServer())
@@ -208,7 +239,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
         grant_type: 'client_credentials',
         client_id: appId,
         client_secret: plaintextApiKey,
-        scope: 'payments:read payments:write',
+        scope: 'app:read app:auth',
       });
     expect(res.status).toBe(200);
     expect(res.body.scope).toBe('');
@@ -274,7 +305,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
   it('accepts X-Cerberus-App-Id + X-Cerberus-App-Secret headers as alternate transport', async () => {
     const { appId, plaintextApiKey } = await registerApp({
       name: `cc-headers-${Date.now()}`,
-      initialScopes: 'payments:read',
+      initialScopes: 'app:read',
     });
 
     // The OAuth controller accepts either the body fields OR the
@@ -297,7 +328,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
   it('writes an apps.token.issued audit event for every successful mint', async () => {
     const { appId, plaintextApiKey } = await registerApp({
       name: `cc-audit-${Date.now()}`,
-      initialScopes: 'payments:read',
+      initialScopes: 'app:read',
     });
     // Clear any prior audit rows for this app so the count is clean.
     await prisma.auditLog.deleteMany({
@@ -316,7 +347,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
         grant_type: 'client_credentials',
         client_id: appId,
         client_secret: plaintextApiKey,
-        scope: 'payments:read',
+        scope: 'app:read',
       })
       .expect(200);
 
@@ -340,9 +371,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
       'client_credentials',
     );
     expect((row!.payload as { appId: string }).appId).toBe(appId);
-    expect((row!.payload as { scopes: string[] }).scopes).toEqual([
-      'payments:read',
-    ]);
+    expect((row!.payload as { scopes: string[] }).scopes).toEqual(['app:read']);
 
     // Sanity: the row's userId column holds the App UUID (apps
     // don't have User UUIDs — the column is free-form text).

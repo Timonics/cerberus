@@ -53,6 +53,7 @@ model Organization {
   users           User[]
   domains         OrganizationDomain[]
   invitations     Invitation[]
+  sessions        Session[]
 
   @@map("organizations")
 }
@@ -110,6 +111,13 @@ model Invitation {
 
   @@index([organizationId])
   @@index([email])
+  /// V1.8: one invite per (org, email) pair — a second invite for the
+  /// same address supersedes the first at the application layer, and
+  /// the DB now enforces it (duplicates were deduped in migration
+  /// 20261019_d1_invitation_org_email_unique).
+  @@unique([organizationId, email])
+  /// V1.8: indexed — the cleanup cron purges on this timestamp.
+  @@index([expiresAt])
   @@map("invitations")
 }
 
@@ -212,6 +220,8 @@ model User {
   mfaSecret    MfaSecret?
   memberships  Membership[]
   sessions     Session[]
+  emailVerifications EmailVerification[]
+  passwordResets     PasswordReset[]
 
   @@index([organizationId])
   @@map("users")
@@ -241,8 +251,10 @@ model Session {
   /// Organization this session is scoped to. V1 (pre-V1.5) sessions
   /// have NULL here — that legacy state is interpreted as "scoped to
   /// the user's first org" by the auth flow. Going forward every
-  /// login / refresh writes this column.
-  organizationId String?   @db.Uuid
+  /// login / refresh writes this column. TEXT to match
+  /// `organizations.id`; FK with ON DELETE SET NULL so a deleted org
+  /// unscopes the session (V1.8 — org scoping is now DB-validated).
+  organizationId String?
   issuedAt     DateTime      @default(now())
   expiresAt    DateTime
   /// Last presentation of `refreshHash`. Distinct from rotation history:
@@ -255,6 +267,13 @@ model Session {
   /// legitimate user already has the rotated token, so a re-presentation
   /// of an old hash is theft.
   previousRefreshHashes String[] @default([])
+  /// V1.8 (audit H-7): timestamp of the most recent refresh-token
+  /// rotation. Powers the 60-second idempotent-retry grace window: a
+  /// re-presentation of a just-rotated hash within the window is a
+  /// legitimate client retry; outside it the session family is revoked
+  /// as compromised. Nullable: NULL for pre-migration rows and for
+  /// sessions that have never rotated (no grace).
+  lastRotatedAt DateTime?
   /// V1.5 (audit C-4): tracks whether the user has completed MFA
   /// verification for this session. False on creation when the user
   /// has MFA enabled; flipped to true by VerifySecondFactorUseCase.
@@ -267,10 +286,14 @@ model Session {
   revokeReason RevokeReason?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([familyId])
   @@index([organizationId])
+  /// V1.8: indexed — the cleanup cron purges on both timestamps.
+  @@index([revokedAt])
+  @@index([expiresAt])
   @@map("sessions")
 }
 
@@ -297,7 +320,11 @@ model SigningKey {
   /// When verifications stop accepting this key. Typically `retiredAt + ttl`.
   expiresAt  DateTime?
   /// Whether this is the active signing key. There is at most one row with
-  /// `isCurrent = true` at any time.
+  /// `isCurrent = true` at any time — this is ENFORCED by the partial unique
+  /// index `signing_keys_one_current` (migration 20261019_d1_signing_key_single_current).
+  /// Prisma cannot express partial indexes, so the constraint lives in SQL
+  /// only; do not drop it. Two concurrent rotations now fail the second
+  /// commit with P2002 instead of silently creating two "current" keys.
   isCurrent  Boolean   @default(false)
 
   @@index([isCurrent])
@@ -319,7 +346,13 @@ model EmailVerification {
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
 
+  /// V1.8: FK with cascade — deleting the user invalidates outstanding
+  /// verification tokens (the table was previously orphan-prone).
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
+  /// V1.8: indexed — the cleanup cron purges on this timestamp.
+  @@index([expiresAt])
   @@map("email_verifications")
 }
 
@@ -334,7 +367,13 @@ model PasswordReset {
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
 
+  /// V1.8: FK with cascade — deleting the user invalidates outstanding
+  /// reset tokens (the table was previously orphan-prone).
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
+  /// V1.8: indexed — the cleanup cron purges on this timestamp.
+  @@index([expiresAt])
   @@map("password_resets")
 }
 
@@ -342,6 +381,11 @@ model PasswordReset {
 /// failed logins, password changes, MFA enrolment, admin actions.
 model AuditLog {
   id        String   @id @default(uuid())
+  /// V1.8 audit fix H-10: id of the originating domain event when this
+  /// row was written by an event handler; null for direct writes.
+  /// Combined with `eventType` in the unique constraint below so an
+  /// outbox re-publish collides instead of duplicating the row.
+  eventId   String?
   userId    String?
   /// Stable, machine-readable event code (e.g. `auth.login.succeeded`).
   eventType String
@@ -355,13 +399,15 @@ model AuditLog {
   @@index([userId])
   @@index([eventType])
   @@index([createdAt])
-  // V1.7 audit fix #31: dedup-by-(eventType, id). The outbox relay
-  // can re-publish a row if the process crashes between bus.publish
-  // and the processedAt update (see #33). A DB-level unique
-  // constraint makes the dedup atomic — the second insert fails
-  // with a P2002 error which the audit log handler catches and
-  // logs at debug.
-  @@unique([eventType, id])
+  // V1.8 audit fix H-10: dedup-by-(eventType, eventId). The outbox
+  // relay can re-publish an event if the process crashes between
+  // bus.publish and the processedAt update (see #33). Event handlers
+  // pass the domain event's id as eventId, so the re-published insert
+  // fails with P2002 which the audit-log handler catches and logs at
+  // debug. (The earlier @@unique([eventType, id]) was tautological —
+  // `id` is the row's own PK, freshly generated per insert — and has
+  // been dropped.)
+  @@unique([eventType, eventId])
   @@map("audit_logs")
 }
 
@@ -429,10 +475,14 @@ model AdminApiKey {
   /// Soft note for the audit trail — e.g. "on-call laptop" or "ci-bot".
   notes        String?    @db.VarChar(255)
 
+  /// `keyHash` is a live query path (legacy plaintext-hash lookup in
+  /// the admin repository), so its index stays. `lookupToken` is
+  /// @unique — its implicit unique index already serves lookups, so
+  /// the redundant @@index was dropped (migration
+  /// 20261019_d1_admin_api_key_redundant_index).
   @@index([keyHash])
   @@index([revokedAt])
   @@index([expiresAt])
-  @@index([lookupToken])
   @@map("admin_api_keys")
 }
 

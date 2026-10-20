@@ -6,6 +6,8 @@ import {
   HttpCode,
   HttpStatus,
   Ip,
+  Param,
+  ParseUUIDPipe,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -18,7 +20,6 @@ import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/veri
 import { IssueAccessTokenUseCase } from '../../../authorization/application/use-cases/issue-access-token.use-case';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
-import { RevokeSessionDto } from './dto/revoke-session.dto';
 import { Public } from '../../../authorization/interfaces/security/public.decorator';
 import { CurrentUser } from '../../../authorization/interfaces/security/current-user.decorator';
 import { Scopes } from '../../../authorization/interfaces/security/scopes.decorator';
@@ -32,18 +33,25 @@ import { UserPrincipal } from '../../../authorization/domain/value-objects/user-
  *
  * Public endpoints (no auth required):
  *
- *   POST /v1/auth/login — body: { email, password, ... }
- *     returns: { refreshToken, sessionId, userId, familyId, expiresAt, mfaRequired }
- *     plus an `accessToken` (JWT) when MFA is not required.
+ *   POST /v1/auth/login — body: { email, password, mfaCode? }
+ *     No MFA (or valid inline mfaCode): 200
+ *     { refreshToken, accessToken, sessionId, userId, familyId,
+ *       expiresAt, mfaRequired: false }.
+ *     MFA pending: 200 { mfaRequired: true, mfaToken, sessionId } —
+ *     NO accessToken, NO refreshToken. mfaToken is a scoped JWT
+ *     (scope 'mfa:verify') for POST /v1/identity/mfa/verify.
  *
  *   POST /v1/auth/refresh — body: { refreshToken }
- *     rotates the refresh token; reuse detection mass-revokes the family.
+ *     rotates the refresh token; reuse detection mass-revokes the
+ *     family (with a 60s idempotent-retry grace window); sessions
+ *     whose MFA verification is pending get 401
+ *     authentication.mfa.required.
  *
  *   POST /v1/auth/logout — body: { refreshToken }
  *
  * Authenticated endpoints (Bearer JWT):
  *
- *   POST /v1/auth/sessions/:id/revoke
+ *   POST /v1/auth/sessions/:sessionId/revoke
  *   GET  /v1/auth/sessions
  *
  * V1.5: the `X-User-Id` placeholder has been replaced with a real
@@ -92,27 +100,43 @@ export class AuthController {
       userAgent: body.userAgent,
       ipAddress: ip,
       appDefaultOrgSlug,
+      mfaCode: body.mfaCode,
     });
-    // V1.5: also issue an access token JWT so the client can call
-    // authenticated endpoints without a separate /v1/oauth/token call.
-    // The token's org claim is pinned to the login result's org
-    // (or the app's default org when the user has no membership).
-    if (!loginResult.mfaRequired) {
-      const issued = await this.issueAccessTokenUc.execute({
-        userId: loginResult.userId,
-        organizationSlug:
-          loginResult.organizationId ?? appDefaultOrgSlug ?? null,
-      });
+    // 2026-10-19 audit fix C1: MFA-pending logins return ONLY the
+    // scoped mfaToken + sessionId. Handing out a usable refreshToken
+    // here (the old behavior) let a password-only attacker walk
+    // through /v1/auth/refresh and defeat the second factor entirely.
+    if (loginResult.mfaRequired) {
       return {
-        ...loginResult,
-        accessToken: issued.accessToken,
-        expiresIn: issued.expiresIn,
+        mfaRequired: true,
+        mfaToken: loginResult.mfaToken,
+        sessionId: loginResult.sessionId,
       };
     }
-    return loginResult;
+    // V1.5: also issue an access token JWT so the client can call
+    // authenticated endpoints without a separate /v1/oauth/token call.
+    // The org claim comes from the user's membership (the login use-
+    // case already verified the session's org binding). Only the
+    // app's default-org SLUG is passed for the pinned-org check —
+    // organizationId is a UUID, not a slug, and the slug lookup would
+    // 404 on it.
+    const issued = await this.issueAccessTokenUc.execute({
+      userId: loginResult.userId,
+      organizationSlug: appDefaultOrgSlug,
+    });
+    return {
+      ...loginResult,
+      accessToken: issued.accessToken,
+      expiresIn: issued.expiresIn,
+    };
   }
 
   @Public()
+  // 2026-10-19 audit LOW fix: /v1/auth/refresh was unthrottled — a
+  // stolen refresh token could be hammered without limit (and the
+  // endpoint does argon2 hashing work per attempt).
+  @Throttle(60, 30)
+  @UseGuards(ThrottleGuard)
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   public async refresh(
@@ -141,6 +165,9 @@ export class AuthController {
   // `logout` requires the refresh token in the body (no JWT), so it
   // is `@Public()` but the use-case validates the token itself.
   @Public()
+  // 2026-10-19 audit LOW fix: /v1/auth/logout was unthrottled.
+  @Throttle(60, 30)
+  @UseGuards(ThrottleGuard)
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   public async logout(@Body() body: RefreshTokenDto): Promise<void> {
@@ -160,10 +187,14 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   public async revokeSession(
     @CurrentUser() principal: UserPrincipal,
-    @Body() body: RevokeSessionDto,
+    @Param('sessionId', ParseUUIDPipe) sessionId: string,
   ): Promise<void> {
+    // 2026-10-19 audit LOW fix: the endpoint ignored its path param
+    // and revoked whatever sessionId was in the body — the DTO and
+    // the route disagreed, and a caller revoking `sessions/abc/revoke`
+    // with `{ "sessionId": "xyz" }` silently revoked xyz.
     await this.revokeSessionUc.execute({
-      sessionId: body.sessionId,
+      sessionId,
       requesterUserId: principal.userId,
     });
   }

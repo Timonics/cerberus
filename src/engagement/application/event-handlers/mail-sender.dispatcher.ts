@@ -14,6 +14,7 @@ import {
 } from '../../domain/events/engagement.events';
 import { MAIL_SENDER, MailSender } from '../../domain/ports/mail-sender.port';
 import {
+  assertTrustedUrl,
   emailVerificationTemplate,
   passwordResetTemplate,
 } from '../../infrastructure/mail/email-templates';
@@ -88,9 +89,13 @@ export class MailSenderDispatcher implements OnModuleInit {
           'email.publicUrl',
         );
       const ttlSeconds = 60 * 60 * 24; // 24 hours
+      const verificationUrl = assertTrustedUrl(
+        `${publicUrl}/v1/engagement/email-verification/confirm?token=${event.plaintextToken}`,
+        publicUrl,
+      );
       const tpl = emailVerificationTemplate({
         displayName: user.displayName,
-        verificationUrl: `${publicUrl}/v1/engagement/email-verification/confirm?token=${event.plaintextToken}`,
+        verificationUrl,
         expiresInHours: ttlSeconds / 3600,
       });
 
@@ -127,9 +132,13 @@ export class MailSenderDispatcher implements OnModuleInit {
           'email.publicUrl',
         );
       const ttlSeconds = 60 * 60; // 1 hour
+      const resetUrl = assertTrustedUrl(
+        `${publicUrl}/v1/engagement/password-reset/confirm?token=${event.plaintextToken}`,
+        publicUrl,
+      );
       const tpl = passwordResetTemplate({
         displayName: user.displayName,
-        resetUrl: `${publicUrl}/v1/engagement/password-reset/confirm?token=${event.plaintextToken}`,
+        resetUrl,
         expiresInHours: ttlSeconds / 3600,
       });
 

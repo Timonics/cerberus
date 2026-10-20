@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import {
+  AdminAuditLogSearchQueryDto,
   AdminDisableUserMfaDto,
   CreateOrganizationDto,
   IssueAdminApiKeyDto,
@@ -115,24 +116,26 @@ export class AdminController {
 
   @Get('audit-log')
   public async searchAuditLog(
-    @Query('userId') userId?: string,
-    @Query('eventType') eventType?: string,
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
+    @Query() query: AdminAuditLogSearchQueryDto,
+    @Req() req: Request,
   ) {
-    const limitNum = limit !== undefined ? Number(limit) : null;
-    const offsetNum = offset !== undefined ? Number(offset) : null;
-    const fromDate = from ? new Date(from) : null;
-    const toDate = to ? new Date(to) : null;
+    // Dates are validated as strict ISO-8601 by the DTO, so `new Date`
+    // here cannot produce an Invalid Date (previously a garbage `from`
+    // crashed downstream with a 500 — audit 2026-10-19).
+    const fromDate = query.from ? new Date(query.from) : null;
+    const toDate = query.to ? new Date(query.to) : null;
     const result = await this.adminSearchAuditLogUc.execute({
-      userId: userId ?? null,
-      eventType: eventType ?? null,
-      limit: Number.isFinite(limitNum) ? limitNum : null,
-      offset: Number.isFinite(offsetNum) ? offsetNum : null,
+      userId: query.userId ?? null,
+      eventType: query.eventType ?? null,
+      limit: query.limit ?? null,
+      offset: query.offset ?? null,
       from: fromDate,
       to: toDate,
+      // Audit 2026-10-19: record WHICH admin key ran the search in the
+      // `admin.audit.searched` row (callerUserId stays null on this
+      // REST surface — it is admin-key auth, not a user JWT).
+      callerUserId: null,
+      callerKeyId: getAdminKeyId(req),
     });
     return {
       entries: result.entries.map((e) => ({

@@ -115,13 +115,17 @@ export class AdminSearchAuditLogUseCase {
     // V1.5: time-range filters actually narrow the result set
     // (previously the use-case validated from/to but the repo
     // ignored them — every search returned unfiltered rows).
+    // Audit 2026-10-19: `offset` is now passed through as SQL
+    // `SKIP` too — it used to be validated and then silently dropped.
     const range = { from: query.from ?? null, to: query.to ?? null };
+    const offset = query.offset ?? 0;
     if (query.userId) {
       return this.auditRepo.findByUserId(
         tx,
         UserId.create(query.userId),
         query.limit ?? 100,
         range,
+        offset,
       );
     }
     if (query.eventType) {
@@ -130,6 +134,7 @@ export class AdminSearchAuditLogUseCase {
         AuditEventType.create(query.eventType),
         query.limit ?? 100,
         range,
+        offset,
       );
     }
     // No userId + no eventType — `buildAdminAuditSearchQuery` already

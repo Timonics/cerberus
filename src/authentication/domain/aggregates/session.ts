@@ -39,8 +39,10 @@ export function isRevokeReason(value: unknown): value is RevokeReason {
  * The "family" concept:
  *   Each session has a `familyId`. On every refresh, the SAME familyId is
  *   reused but the refresh-hash changes. If a refresh token from a
- *   family is presented TWICE (the first use already rotated it), the
- *   family is treated as compromised and ALL sessions in it are revoked.
+ *   family is presented again AFTER the 60-second rotation grace window
+ *   (see `lastRotatedAt`), the family is treated as compromised and ALL
+ *   sessions in it are revoked. Within the grace window the retry is
+ *   idempotent — legitimate clients double-submit (timeout, two tabs).
  *
  * Invariants:
  *   * `refreshHash` is unique across the table (DB UNIQUE).
@@ -61,11 +63,20 @@ export class Session {
     public readonly expiresAt: Date,
     public readonly lastUsedAt: Date | null,
     /**
+     * 2026-10-19 audit fix H-7: timestamp of the most recent refresh
+     * rotation. Powers the 60-second idempotent-retry grace window —
+     * a re-presentation of a just-rotated token within the window is a
+     * legitimate client retry (timeout, two tabs), not theft. Null
+     * until the first rotation.
+     */
+    public readonly lastRotatedAt: Date | null,
+    /**
      * V1.5: chain of recently-rotated refresh-token hashes. Length is
      * bounded to a small window (5 entries by default). When a presented
-     * token's hash is in this list, the family is mass-revoked — the
-     * legitimate user already has the rotated token, so a re-presentation
-     * of an old hash is theft.
+     * token's hash is in this list, the presentation is either a
+     * legitimate retry (within the `lastRotatedAt` grace window) or
+     * theft — RefreshSessionUseCase decides between idempotent retry
+     * and family revocation.
      */
     public readonly previousRefreshHashes: ReadonlyArray<string>,
     /**
@@ -137,6 +148,7 @@ export class Session {
       now,
       expiresAt,
       null, // lastUsedAt — null on first creation
+      null, // lastRotatedAt — null on first creation
       [], // previousRefreshHashes — fresh session
       !params.requiresMfa, // mfaVerified: true if no MFA required
       null, // revokedAt — null on first creation
@@ -157,6 +169,13 @@ export class Session {
     issuedAt: Date;
     expiresAt: Date;
     lastUsedAt: Date | null;
+    /**
+     * 2026-10-19 audit fix H-7: most recent rotation timestamp.
+     * Optional so rows written before the grace-window migration
+     * rehydrate as null (no grace — first retry after the deploy
+     * falls through to the compromise path only if actually reused).
+     */
+    lastRotatedAt?: Date | null;
     /** V1.5: chain of rotated-hashes for reuse detection. */
     previousRefreshHashes?: ReadonlyArray<string>;
     /** V1.5 (audit C-4): MFA-verified flag. Defaults to true so legacy
@@ -177,6 +196,7 @@ export class Session {
       params.issuedAt,
       params.expiresAt,
       params.lastUsedAt,
+      params.lastRotatedAt ?? null,
       params.previousRefreshHashes ?? [],
       params.mfaVerified ?? true, // legacy sessions are pre-verified
       params.revokedAt,
@@ -232,6 +252,7 @@ export class Session {
       this.issuedAt,
       params.newExpiresAt,
       now,
+      now, // lastRotatedAt — bumped on every rotation
       newPrevious,
       this.mfaVerified, // V1.5 (audit C-4): preserves across rotation
       null, // revokedAt — rotation only happens on live sessions
@@ -273,6 +294,7 @@ export class Session {
       this.issuedAt,
       this.expiresAt,
       this.lastUsedAt,
+      this.lastRotatedAt,
       this.previousRefreshHashes,
       this.mfaVerified, // V1.5: revoked sessions preserve the flag for audit
       now,
@@ -314,6 +336,7 @@ export class Session {
       this.issuedAt,
       this.expiresAt,
       this.lastUsedAt,
+      this.lastRotatedAt,
       this.previousRefreshHashes,
       true, // mfaVerified
       this.revokedAt,

@@ -142,8 +142,13 @@ function ipv4ToInt(ip: string): number | null {
   if (parts.length !== 4) return null;
   let acc = 0;
   for (const p of parts) {
+    // Audit 2026-10-19 (admin LOW): reject empty / non-decimal
+    // segments outright. `Number('')` is 0 and `Number('0x10')` is
+    // 16 — both used to be silently coerced, so `10.0..5/32`
+    // parsed as `10.0.0.5` instead of being rejected as malformed.
+    if (!/^\d{1,3}$/.test(p)) return null;
     const n = Number(p);
-    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    if (n < 0 || n > 255) return null;
     acc = (acc << 8) + n;
   }
   return acc >>> 0;

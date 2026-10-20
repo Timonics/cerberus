@@ -5,6 +5,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Ip,
   Post,
   Res,
   UseGuards,
@@ -104,6 +105,7 @@ export class OAuthController {
   public async token(
     @Body() body: TokenRequestDto,
     @Res() res: Response,
+    @Ip() ip: string,
     @Headers('x-cerberus-app-id') appId?: string,
     @Headers('x-cerberus-app-secret') appSecret?: string,
   ) {
@@ -121,29 +123,43 @@ export class OAuthController {
       // session, then immediately issue an access token from the
       // session's user. V1.5: pass appDefaultOrgSlug so the session
       // (and therefore the access token) is scoped to the bound org.
+      // 2026-10-19 audit fix H-8: pass the request IP so the lockout
+      // key doesn't collapse to `email:0.0.0.0` (which split counters
+      // across transports and destroyed per-IP forensics). The mfaCode
+      // (2026-10-19 audit fix C1) lets first-party clients complete
+      // MFA inline — same contract as POST /v1/auth/login.
       const loginResult = await this.loginUc.execute({
         email: body.username,
         password: body.password,
+        ipAddress: ip,
         appDefaultOrgSlug,
+        mfaCode: body.mfa_code,
       });
-      // V1.5 (audit C-4): if the session requires MFA, refuse to
-      // issue an access token via the OAuth password grant. The user
-      // must use the REST /v1/auth/login endpoint (which returns
-      // mfaRequired: true) or the REST /v1/identity/mfa/verify flow.
-      // Without this, a stolen password is sufficient to mint a JWT.
+      // V1.5 (audit C-4) + 2026-10-19 audit fixes C1/H-12: if the
+      // session requires MFA and no valid inline code was supplied,
+      // refuse to issue tokens. The response is a documented
+      // non-standard extension of RFC 6749: 403 with
+      // `error: 'mfa_required'` plus a scoped `mfa_token` (JWT,
+      // scope 'mfa:verify', TTL MFA_PENDING_TOKEN_TTL) that the client
+      // presents to POST /v1/identity/mfa/verify. No refresh_token and
+      // no access_token are returned on this path.
       if (loginResult.mfaRequired) {
         res.status(HttpStatus.FORBIDDEN).json({
           error: 'mfa_required',
           error_description:
-            'Multi-factor authentication required; call POST /v1/auth/login or POST /v1/identity/mfa/verify first',
+            'Multi-factor authentication required; present mfa_token at POST /v1/identity/mfa/verify (or supply mfa_code with the password grant)',
+          mfa_token: loginResult.mfaToken,
           session_id: loginResult.sessionId,
         });
         return;
       }
+      // The org claim comes from the user's membership (the login
+      // use-case already enforced the app binding). Only the app's
+      // default-org SLUG feeds the pinned-org check — session
+      // organizationId is a UUID, not a slug.
       const issued = await this.issueAccessTokenUc.execute({
         userId: loginResult.userId,
-        organizationSlug:
-          loginResult.organizationId ?? appDefaultOrgSlug ?? null,
+        organizationSlug: appDefaultOrgSlug,
       });
       res.json({
         access_token: issued.accessToken,

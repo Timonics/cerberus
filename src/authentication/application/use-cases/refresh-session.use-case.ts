@@ -27,6 +27,7 @@ import {
   OrganizationRepository,
 } from '../../../identity/domain/ports/organization.repository.port';
 import { OrgSlug } from '../../../identity/domain/value-objects/org-slug';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
 export interface RefreshSessionInput {
   refreshToken: string;
@@ -51,28 +52,68 @@ export interface RefreshSessionResult {
 const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 /**
+ * 2026-10-19 audit fix H-7: idempotent-retry grace window. A presented
+ * hash found in `previousRefreshHashes` within this many milliseconds
+ * of `lastRotatedAt` is a legitimate client retry (request timeout,
+ * two tabs racing) — the same response is returned again WITHOUT a
+ * second rotation. Outside the window, the same presentation is theft:
+ * the session family is revoked as compromised.
+ */
+const ROTATION_GRACE_WINDOW_MS = 60 * 1000;
+
+/**
+ * What the transaction decided. Audit writes must happen AFTER the
+ * transaction commits, so paths that need an audit trail return a
+ * verdict instead of throwing and the use-case acts on it outside
+ * the tx boundary.
+ */
+type RefreshOutcome =
+  | { kind: 'tokens'; result: RefreshSessionResult }
+  | { kind: 'grace_retry'; result: RefreshSessionResult }
+  | {
+      kind: 'compromise';
+      userId: string;
+      sessionId: string;
+      familyId: string;
+      revokedCount: number;
+    }
+  | { kind: 'mfa_required'; userId: string; sessionId: string };
+
+/**
  * Refresh a session by rotating the refresh token.
  *
- * Two-step algorithm:
+ * Lookup algorithm (2026-10-19 audit fix H-7 — reuse detection is no
+ * longer dead code and legit double-refreshes no longer mass-revoke):
  *
- *   1. Hash the presented token and look up by hash.
- *      a. No row → 401 "not_found". No family compromise action —
- *         we have no evidence this token was ever valid.
- *      b. Row exists, but revoked / expired → 401 "expired". Same.
+ *   1. Hash the presented token and look up by CURRENT hash
+ *      (`findByRefreshHash`).
+ *      a. No row → SECOND lookup by rotation history
+ *         (`findByPreviousHash`). Still no row → 401 "not_found": we
+ *         have no evidence this token was ever valid.
+ *      b. Row exists but revoked / expired → 401.
  *
- *   2. Compare the SESSION'S stored `lastUsedAt` with the current time.
- *      If `lastUsedAt` is "very recent" (within the rotation window)
- *      AND `lastUsedAt != issuedAt`, then this token has been used
- *      before. That's REUSE — the legitimate user (or attacker)
- *      presented it twice. Mass-revoke the family.
+ *   2. A row found via the rotation history means this token was
+ *      already rotated out. Compare `lastRotatedAt` with now:
+ *      a. Within the 60-second grace window → idempotent retry:
+ *         return the session's current tokens WITHOUT rotating again.
+ *         (The current plaintext is not stored, so the presented
+ *         token — still valid inside the window — is returned.)
+ *      b. Outside the grace window → FAMILY_COMPROMISED: revoke the
+ *         whole family, audit `authentication.refresh.reuse_detected`
+ *         + `authentication.refresh.family_revoked`, throw 401.
  *
- *      Detection window: we treat anything within
- *      REFRESH_TOKEN_TTL_SECONDS as "could still be the legitimate
- *      user". Beyond that, even a slow legitimate user has had time
- *      to rotate, so we trust the second presentation.
+ *   3. First presentation of the current hash (legitimate rotation).
+ *      The rotation write is atomic (compare-and-swap on the current
+ *      hash). If the CAS updates zero rows, a concurrent rotation won:
+ *      re-read the row and run step 2's classification on it — the
+ *      presented hash is now in its `previousRefreshHashes`. This
+ *      removes the false-positive mass-revoke that previously fired
+ *      for every concurrent double-refresh.
  *
- * Step (3) on the success path: mint a new refresh token, replace the
- * stored hash, bump `lastUsedAt`, return the new token.
+ * 2026-10-19 audit fix C1: a session whose MFA verification is still
+ * pending (`mfaVerified=false`) is refused here with 401
+ * `authentication.mfa.required` — the REST path previously never
+ * checked, which let a password-only attacker bypass MFA entirely.
  */
 @Injectable()
 export class RefreshSessionUseCase {
@@ -86,6 +127,7 @@ export class RefreshSessionUseCase {
     private readonly organizationRepo: OrganizationRepository,
     @Inject(REFRESH_TOKEN_GENERATOR)
     private readonly refreshTokenGen: RefreshTokenGenerator,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(
@@ -95,157 +137,275 @@ export class RefreshSessionUseCase {
       input.refreshToken,
     );
 
-    return this.txRunner.run<RefreshSessionResult>(async (tx: Tx) => {
-      const existing = await this.sessionRepo.findByRefreshHash(
-        tx,
-        presentedHash.value,
-      );
-
-      if (!existing) {
-        throw new DomainError(
-          'authentication.session.not_found',
-          'Refresh token is not recognized',
-        );
-      }
-
-      if (!existing.isAliveAt(this.clock.now())) {
-        throw new DomainError(
-          'authentication.session.expired',
-          'Refresh token is no longer valid',
-        );
-      }
-
-      // App-bound org-scope check. When the refresh carries an app's
-      // defaultOrgSlug, the session must already be scoped to that org.
-      // Without this, a user could refresh a session they obtained via
-      // a different app — i.e. cross-app session leak.
-      //
-      // V1.5 fix: legacy sessions with `organizationId = NULL` are
-      // accepted under any app context. V2 will require explicit
-      // re-binding.
-      if (input.appDefaultOrgSlug && existing.organizationId === null) {
-        // Legacy unscoped session — accept (V1 backward-compat).
-      } else if (input.appDefaultOrgSlug && existing.organizationId !== null) {
-        const sessionOrg = await this.organizationRepo.findById(
+    const outcome = await this.txRunner.run<RefreshOutcome>(
+      async (tx: Tx): Promise<RefreshOutcome> => {
+        const now = this.clock.now();
+        const existing = await this.sessionRepo.findByRefreshHash(
           tx,
-          existing.organizationId,
+          presentedHash.value,
         );
-        if (
-          !sessionOrg ||
-          !sessionOrg.slug.equals(OrgSlug.create(input.appDefaultOrgSlug))
-        ) {
-          throw new DomainError(
-            'authentication.app_membership_required',
-            'Refresh token is scoped to a different organization than this app binds to',
-            {
-              sessionOrgSlug: sessionOrg?.slug.value ?? null,
-              appDefaultOrgSlug: input.appDefaultOrgSlug,
-            },
+
+        if (!existing) {
+          // H-7: the promised second lookup. A presented hash that is
+          // no longer the current hash but sits in a row's rotation
+          // history is either a grace-window retry or a stolen token.
+          const rotated = await this.sessionRepo.findByPreviousHash(
+            tx,
+            presentedHash.value,
+          );
+          if (!rotated) {
+            throw new DomainError(
+              'authentication.session.not_found',
+              'Refresh token is not recognized',
+            );
+          }
+          return this.classifyRotatedPresentation(
+            tx,
+            rotated,
+            input.refreshToken,
+            now,
           );
         }
-      }
 
-      // Reuse detection (V1.5): reuse means the presented hash was
-      // previously rotated OUT (i.e. it's in `previousRefreshHashes`).
-      //
-      // The legitimate path:
-      //   (1) user presents OLD hash → it's in `refreshHash` →
-      //       we rotate → OLD hash moves to `previousRefreshHashes`,
-      //       NEW hash becomes `refreshHash`.
-      //   (2) user presents NEW hash → it's in `refreshHash` → rotate again.
-      //
-      // The illegitimate path (an attacker captured an OLD token after
-      // the legitimate user already rotated):
-      //   (1') attacker presents OLD hash → but `refreshHash` is now NEW,
-      //        so the lookup MISSES — the OLD hash is in
-      //        `previousRefreshHashes` of the session row.
-      //   Wait — `findByRefreshHash` only matches the current `refreshHash`
-      //   column. So we never find the session row by an old hash.
-      //
-      // We need a SECOND lookup: did this presented hash match any
-      // previousRefreshHashes row? If yes, the family is compromised.
-      //
-      // For an O(1) reuse check we'd index `previousRefreshHashes` with
-      // a GIN index. V1 keeps it simple: scan the user's active sessions
-      // and check each row's `previousRefreshHashes` array. With ≤ 100
-      // active sessions per user this is fast enough.
-      if (existing.previousRefreshHashes.includes(presentedHash.value)) {
-        // Mass-revoke the family — the legitimate user already rotated
-        // past this token, so a re-presentation is theft.
-        await this.sessionRepo.revokeAllInFamily(
-          tx,
-          existing.familyId,
-          'FAMILY_COMPROMISED',
+        if (!existing.isAliveAt(now)) {
+          throw new DomainError(
+            'authentication.session.expired',
+            'Refresh token is no longer valid',
+          );
+        }
+
+        // Audit fix C1 (mirror of the OAuth grant check): refuse to
+        // rotate a session whose MFA verification is still pending.
+        if (!existing.mfaVerified) {
+          return {
+            kind: 'mfa_required',
+            userId: existing.userId.value,
+            sessionId: existing.id.value,
+          };
+        }
+
+        // App-bound org-scope check. When the refresh carries an app's
+        // defaultOrgSlug, the session must already be scoped to that
+        // org. Without this, a user could refresh a session they
+        // obtained via a different app — i.e. cross-app session leak.
+        //
+        // V1.5 fix: legacy sessions with `organizationId = NULL` are
+        // accepted under any app context. V2 will require explicit
+        // re-binding.
+        if (input.appDefaultOrgSlug && existing.organizationId === null) {
+          // Legacy unscoped session — accept (V1 backward-compat).
+        } else if (
+          input.appDefaultOrgSlug &&
+          existing.organizationId !== null
+        ) {
+          const sessionOrg = await this.organizationRepo.findById(
+            tx,
+            existing.organizationId,
+          );
+          if (
+            !sessionOrg ||
+            !sessionOrg.slug.equals(OrgSlug.create(input.appDefaultOrgSlug))
+          ) {
+            throw new DomainError(
+              'authentication.app_membership_required',
+              'Refresh token is scoped to a different organization than this app binds to',
+              {
+                sessionOrgSlug: sessionOrg?.slug.value ?? null,
+                appDefaultOrgSlug: input.appDefaultOrgSlug,
+              },
+            );
+          }
+        }
+
+        // Legitimate rotation: mint a new refresh token, rotate the
+        // stored hash atomically (compare-and-swap on the CURRENT
+        // hash so two concurrent rotations can't both succeed).
+        const newPlaintext = this.refreshTokenGen.generate();
+        const newHash = await RefreshTokenHash.fromPlaintext(newPlaintext);
+        const newExpiresAt = new Date(
+          now.getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000,
         );
+        const rotated = existing.rotateRefreshToken({
+          newRefreshHash: newHash,
+          clock: this.clock,
+          newExpiresAt,
+        });
+        const swapped = await this.sessionRepo.rotateRefreshTokenAtomic(
+          tx,
+          presentedHash.value,
+          {
+            refreshHash: newHash.value,
+            expiresAt: newExpiresAt,
+            lastUsedAt: now,
+            lastRotatedAt: now,
+            previousRefreshHashes: rotated.previousRefreshHashes,
+          },
+        );
+        if (!swapped) {
+          // CAS race loser — another rotation won. Re-read the row and
+          // classify: our presented hash should now be in its rotation
+          // history (legitimate concurrent retry), otherwise the
+          // family is treated as compromised.
+          const fresh = await this.sessionRepo.findById(tx, existing.id);
+          if (
+            fresh &&
+            fresh.previousRefreshHashes.includes(presentedHash.value)
+          ) {
+            return this.classifyRotatedPresentation(
+              tx,
+              fresh,
+              input.refreshToken,
+              now,
+            );
+          }
+          const revokedCount = await this.sessionRepo.revokeAllInFamily(
+            tx,
+            existing.familyId,
+            'FAMILY_COMPROMISED',
+          );
+          return {
+            kind: 'compromise',
+            userId: existing.userId.value,
+            sessionId: existing.id.value,
+            familyId: existing.familyId,
+            revokedCount,
+          };
+        }
+        const saved = Session.fromPersistence({
+          ...rotated,
+          mfaVerified: existing.mfaVerified,
+          revokedAt: null,
+          revokeReason: null,
+        });
+
+        await this.eventBus.publishAll([
+          new SessionRefreshed(
+            this.idGenerator.generate(),
+            this.clock.now(),
+            saved.id,
+            saved.userId,
+          ),
+        ]);
+
+        return {
+          kind: 'tokens',
+          result: {
+            refreshToken: newPlaintext,
+            sessionId: saved.id.value,
+            userId: saved.userId.value,
+            familyId: saved.familyId,
+            expiresAt: saved.expiresAt,
+          },
+        };
+      },
+    );
+
+    // Post-commit actions: audits must be durable with the revocation.
+    switch (outcome.kind) {
+      case 'tokens':
+      case 'grace_retry':
+        return outcome.result;
+      case 'mfa_required':
+        await this.recordAuditEventUc.execute({
+          userId: outcome.userId,
+          eventType: 'authentication.mfa.required',
+          payload: {
+            sessionId: outcome.sessionId,
+            outcome: 'refresh_rejected',
+          },
+        });
+        throw new DomainError(
+          'authentication.mfa.required',
+          'Multi-factor authentication required; verify MFA on this session before refreshing',
+          { sessionId: outcome.sessionId },
+        );
+      case 'compromise':
+        await this.recordAuditEventUc.execute({
+          userId: outcome.userId,
+          eventType: 'authentication.refresh.reuse_detected',
+          payload: {
+            sessionId: outcome.sessionId,
+            familyId: outcome.familyId,
+          },
+        });
+        await this.recordAuditEventUc.execute({
+          userId: outcome.userId,
+          eventType: 'authentication.refresh.family_revoked',
+          payload: {
+            familyId: outcome.familyId,
+            revokedCount: outcome.revokedCount,
+            reason: 'FAMILY_COMPROMISED',
+          },
+        });
+        // Generic 401 — don't tell the presenter we detected reuse.
         throw new DomainError(
           'authentication.session.not_found',
           'Refresh token is not recognized',
         );
-      }
+    }
+  }
 
-      // First presentation of this hash (legitimate rotation).
-      // V1.5 (audit H-1): the rotation write is now atomic — it
-      // compares on the current hash and refuses to rotate if
-      // another concurrent rotation has already moved the row.
-      // Concurrent races are detected here as "reuse" because the
-      // other rotation would have changed the refreshHash column,
-      // causing our updateMany WHERE to match zero rows.
-      const newPlaintext = this.refreshTokenGen.generate();
-      const newHash = await RefreshTokenHash.fromPlaintext(newPlaintext);
-      const now = this.clock.now();
-      const newExpiresAt = new Date(
-        now.getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000,
+  /**
+   * Classify a presentation whose hash is in the session's rotation
+   * history. Within the grace window → idempotent retry (no second
+   * rotation, no revocation). Outside → family compromise.
+   */
+  private async classifyRotatedPresentation(
+    tx: Tx,
+    session: Session,
+    presentedPlaintext: string,
+    now: Date,
+  ): Promise<RefreshOutcome> {
+    if (!session.isAliveAt(now)) {
+      throw new DomainError(
+        'authentication.session.expired',
+        'Refresh token is no longer valid',
       );
-      const rotated = existing.rotateRefreshToken({
-        newRefreshHash: newHash,
-        clock: this.clock,
-        newExpiresAt,
-      });
-      const swapped = await this.sessionRepo.rotateRefreshTokenAtomic(
-        tx,
-        presentedHash.value,
-        {
-          refreshHash: newHash.value,
-          expiresAt: newExpiresAt,
-          lastUsedAt: now,
-          previousRefreshHashes: rotated.previousRefreshHashes,
-        },
-      );
-      if (!swapped) {
-        // Someone else rotated first — treat as reuse, mass-revoke.
-        await this.sessionRepo.revokeAllInFamily(
-          tx,
-          existing.familyId,
-          'FAMILY_COMPROMISED',
-        );
-        throw new DomainError(
-          'authentication.session.not_found',
-          'Refresh token is not recognized',
-        );
-      }
-      const saved = Session.fromPersistence({
-        ...rotated,
-        mfaVerified: existing.mfaVerified,
-        revokedAt: null,
-        revokeReason: null,
-      });
+    }
 
-      await this.eventBus.publishAll([
-        new SessionRefreshed(
-          this.idGenerator.generate(),
-          this.clock.now(),
-          saved.id,
-          saved.userId,
-        ),
-      ]);
-
+    // C1 applies to retries too: an MFA-pending session gets no tokens
+    // through any path.
+    if (!session.mfaVerified) {
       return {
-        refreshToken: newPlaintext,
-        sessionId: saved.id.value,
-        userId: saved.userId.value,
-        familyId: saved.familyId,
-        expiresAt: saved.expiresAt,
+        kind: 'mfa_required',
+        userId: session.userId.value,
+        sessionId: session.id.value,
       };
-    });
+    }
+
+    const rotatedAt = session.lastRotatedAt;
+    if (
+      rotatedAt !== null &&
+      now.getTime() - rotatedAt.getTime() <= ROTATION_GRACE_WINDOW_MS
+    ) {
+      // Idempotent retry. The current plaintext is not stored, so we
+      // return the presented token — it remains valid until the grace
+      // window closes. No state change: the rotation (and its
+      // lastRotatedAt timestamp) from the first, winning request
+      // stands.
+      return {
+        kind: 'grace_retry',
+        result: {
+          refreshToken: presentedPlaintext,
+          sessionId: session.id.value,
+          userId: session.userId.value,
+          familyId: session.familyId,
+          expiresAt: session.expiresAt,
+        },
+      };
+    }
+
+    const revokedCount = await this.sessionRepo.revokeAllInFamily(
+      tx,
+      session.familyId,
+      'FAMILY_COMPROMISED',
+    );
+    return {
+      kind: 'compromise',
+      userId: session.userId.value,
+      sessionId: session.id.value,
+      familyId: session.familyId,
+      revokedCount,
+    };
   }
 }

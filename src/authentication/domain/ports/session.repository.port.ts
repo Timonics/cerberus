@@ -23,6 +23,19 @@ export abstract class SessionRepository extends BaseRepository<
     refreshHash: string,
   ): Promise<Session | null>;
 
+  /**
+   * 2026-10-19 audit fix H-7: look up a session whose
+   * `previousRefreshHashes` array contains the given (already-rotated)
+   * hash. This is the reuse-detection lookup: a presented hash that is
+   * no longer the current `refreshHash` but appears in the rotation
+   * history is either a legitimate retry inside the grace window or a
+   * stolen token — the caller decides using `lastRotatedAt`.
+   */
+  public abstract findByPreviousHash(
+    tx: Tx,
+    refreshHash: string,
+  ): Promise<Session | null>;
+
   public abstract findActiveByUserId(
     tx: Tx,
     userId: UserId,
@@ -63,7 +76,9 @@ export abstract class SessionRepository extends BaseRepository<
    * to rotate unless the current row's `refreshHash` equals
    * `currentHash`. Returns true if the rotation succeeded, false
    * if another concurrent rotation already wrote (in which case the
-   * caller treats it as reuse detection).
+   * caller re-reads the row and classifies the attempt: hash now in
+   * `previousRefreshHashes` → grace-window idempotent retry; otherwise
+   * → family compromise).
    *
    * This is the only safe way to rotate refresh tokens under Prisma's
    * default READ COMMITTED isolation — a non-atomic read-then-write
@@ -76,6 +91,8 @@ export abstract class SessionRepository extends BaseRepository<
       refreshHash: string;
       expiresAt: Date;
       lastUsedAt: Date;
+      /** 2026-10-19 audit fix H-7: rotation timestamp for the grace window. */
+      lastRotatedAt: Date;
       previousRefreshHashes: ReadonlyArray<string>;
     },
   ): Promise<boolean>;

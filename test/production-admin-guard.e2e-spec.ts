@@ -128,10 +128,13 @@ describe('ProductionAdminGuard (V1.7)', () => {
         ttlSeconds: 3600,
       });
     expect(res.status).toBe(401);
-    // The lookup-token service returns null for revoked keys
-    // (the underlying findActiveByLookupToken filters on
-    // revokedAt IS NULL), which the guard maps to
-    // admin.auth.invalid.
+    // ProductionAdminGuard resolves the key via the lookup-token
+    // service, which filters on revokedAt IS NULL — a revoked key
+    // returns null and maps to the SAME code as an unknown key, so
+    // the guard can't be used as a key-existence oracle. (The REST
+    // /admin/* surface goes through AdminApiKeyGuard +
+    // VerifyAdminApiKeyUseCase instead, which deliberately
+    // distinguishes revoked — see admin-negative-auth.e2e-spec.ts.)
     expect(res.body.code).toBe('admin.auth.invalid');
   });
 

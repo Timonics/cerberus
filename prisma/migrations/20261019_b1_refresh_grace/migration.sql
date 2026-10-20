@@ -1,0 +1,16 @@
+-- 2026-10-19 audit fix H-7 (workstream B1):
+-- Timestamp of the most recent refresh-token rotation. Powers the
+-- 60-second idempotent-retry grace window: a re-presentation of a
+-- just-rotated hash within the window is a legitimate client retry,
+-- outside it the session family is revoked as compromised.
+--
+-- Nullable: NULL for rows written before this migration and for
+-- sessions that have never rotated. A NULL lastRotatedAt means "no
+-- grace" — a retry against such a row falls through to the compromise
+-- path only if the hash is genuinely in the rotation history.
+--
+-- NOTE (schema owner): schema.prisma must gain
+--   lastRotatedAt DateTime?
+-- on the Session model and the Prisma client must be regenerated so
+-- the repository adapter can read/write the column without casts.
+ALTER TABLE "sessions" ADD COLUMN "lastRotatedAt" TIMESTAMP(3);

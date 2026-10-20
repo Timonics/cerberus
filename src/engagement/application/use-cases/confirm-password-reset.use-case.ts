@@ -14,6 +14,7 @@ import {
   TransactionRunner,
   Tx,
 } from '../../../shared/domain';
+import { Password } from '../../../shared/domain/value-objects/password';
 import {
   CREDENTIAL_REPOSITORY,
   CredentialRepository,
@@ -23,6 +24,7 @@ import {
   PasswordResetRepository,
 } from '../../domain/ports/password-reset.repository.port';
 import { Sha256TokenService } from '../../infrastructure/security/sha256-token.service';
+import { RecordAuditEventUseCase } from './record-audit-event.use-case';
 
 export interface ConfirmPasswordResetInput {
   token: string;
@@ -41,6 +43,11 @@ export interface ConfirmPasswordResetInput {
  * Throws:
  *   - `engagement.password_reset.invalid_token` — token not found.
  *   - `engagement.password_reset.expired` — token past `expiresAt`.
+ *   - `identity.password.too_weak` — new password fails the policy
+ *     (enforced here so the GraphQL path, which has no DTO bound, is
+ *     covered too).
+ *
+ * Audits `identity.password.reset` after the rotation commits.
  */
 @Injectable()
 export class ConfirmPasswordResetUseCase {
@@ -55,12 +62,22 @@ export class ConfirmPasswordResetUseCase {
     private readonly credentialRepo: CredentialRepository,
     @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasher,
     private readonly tokenService: Sha256TokenService,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(input: ConfirmPasswordResetInput): Promise<void> {
     const tokenHash = this.tokenService.hash(input.token);
 
-    const events = await this.txRunner.run<unknown[]>(async (tx: Tx) => {
+    // 2026-10-19 audit MEDIUM: enforce the password policy at the
+    // use-case boundary. The REST DTO bounds length, but the GraphQL
+    // input has no bound at all — without this, a reset could rotate
+    // to a 1-char password.
+    const newPassword = Password.create(input.newPassword);
+
+    const { events, userId } = await this.txRunner.run<{
+      events: unknown[];
+      userId: string;
+    }>(async (tx: Tx) => {
       const reset = await this.resetRepo.findByTokenHash(tx, tokenHash);
       if (!reset) {
         throw new DomainError(
@@ -83,7 +100,10 @@ export class ConfirmPasswordResetUseCase {
         );
       }
 
-      const newHashString = await this.passwordHasher.hash(input.newPassword);
+      const newHashString = await this.passwordHasher.hash(
+        newPassword.toHashableString(),
+      );
+      newPassword.dispose();
       const newHash = PasswordHash.fromHashString(newHashString);
 
       const consumed = reset.consume(this.clock, this.idGenerator);
@@ -96,9 +116,24 @@ export class ConfirmPasswordResetUseCase {
       });
       await this.credentialRepo.save(tx, updated);
 
-      return [...savedReset.pullDomainEvents(), ...updated.pullDomainEvents()];
+      return {
+        events: [
+          ...savedReset.pullDomainEvents(),
+          ...updated.pullDomainEvents(),
+        ],
+        userId: credential.userId.value,
+      };
     });
 
     await this.eventBus.publishAll(events as never);
+
+    // 2026-10-19 audit MEDIUM: the credential rotation itself was
+    // never audited (only the token request/consumption). Write
+    // `identity.password.reset` so account-history shows the rotation.
+    await this.recordAuditEventUc.execute({
+      userId,
+      eventType: 'identity.password.reset',
+      payload: {},
+    });
   }
 }

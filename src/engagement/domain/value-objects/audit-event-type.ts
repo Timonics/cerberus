@@ -51,6 +51,22 @@ export const AUDIT_EVENT_TYPES = [
   // Authorization
   'authorization.token.minted',
   'authorization.token.revoked',
+  // 2026-10-19 audit fixes (B1): refresh-token reuse detection now emits
+  // an audit trail, MFA-pending login issuances are throttled per email,
+  // and refresh attempts against an MFA-unverified session are recorded.
+  'authentication.refresh.reuse_detected',
+  'authentication.refresh.family_revoked',
+  'authentication.login.throttled',
+  'authentication.mfa.required',
+  // 2026-10-19 audit fixes (identity/engagement workstream):
+  // H-5b — both MFA-verify outcomes; MEDIUM — password-reset rotation
+  // audit + opaque registration duplicates + post-verification
+  // email-domain org joins.
+  'identity.mfa.verified',
+  'identity.mfa.verification_failed',
+  'identity.password.reset',
+  'identity.registration.duplicate',
+  'identity.organization.joined_by_domain',
 ] as const;
 
 export type AuditEventTypeLiteral = (typeof AUDIT_EVENT_TYPES)[number];

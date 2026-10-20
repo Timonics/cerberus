@@ -206,6 +206,48 @@ describe('Session — V1.5 audit contracts', () => {
     });
   });
 
+  describe('H-7 rotation grace window (lastRotatedAt)', () => {
+    it('is null on creation', () => {
+      const session = makeSession({
+        requiresMfa: false,
+        hash: makeHash('grace-1'),
+      });
+      expect(session.lastRotatedAt).toBeNull();
+    });
+
+    it('is stamped to clock.now() on rotation', () => {
+      const clock = new FixedClock(fixedTs());
+      const session = makeSession({
+        requiresMfa: false,
+        hash: makeHash('grace-2'),
+      });
+      clock.advance(30_000);
+      const rotated = session.rotateRefreshToken({
+        newRefreshHash: makeHash('grace-2-rotated'),
+        clock,
+        newExpiresAt: new Date(clock.now().getTime() + 3600_000),
+      });
+      expect(rotated.lastRotatedAt?.getTime()).toBe(clock.now().getTime());
+    });
+
+    it('is preserved across revoke and markMfaVerified', () => {
+      const clock = new FixedClock(fixedTs());
+      const session = makeSession({
+        requiresMfa: true,
+        hash: makeHash('grace-3'),
+      });
+      const rotated = session.rotateRefreshToken({
+        newRefreshHash: makeHash('grace-3-rotated'),
+        clock,
+        newExpiresAt: new Date(clock.now().getTime() + 3600_000),
+      });
+      const verified = rotated.markMfaVerified();
+      expect(verified.lastRotatedAt).toEqual(rotated.lastRotatedAt);
+      const revoked = verified.revoke(clock, 'USER_LOGOUT');
+      expect(revoked.lastRotatedAt).toEqual(rotated.lastRotatedAt);
+    });
+  });
+
   describe('lifecycle invariants', () => {
     it('isAliveAt returns false after expiry', () => {
       const clock = new FixedClock(fixedTs());

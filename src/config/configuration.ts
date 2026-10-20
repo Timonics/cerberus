@@ -26,6 +26,14 @@ export interface AppConfig {
    * tokens. Rotating this invalidates all outstanding tokens (intentional
    * fail-secure — same pattern as JWT signing keys). 32+ chars required. */
   tokenSecret: string;
+  /**
+   * Master key for AES-256-GCM encryption of TOTP secrets at rest
+   * (audit H-5a). Rotating it invalidates every stored MFA secret —
+   * users must re-enroll (intentional fail-secure). 32+ chars required;
+   * production must set it explicitly (Joi validation rejects the dev
+   * default when NODE_ENV=production).
+   */
+  mfaSecretKey: string;
   jwt: {
     issuer: string;
     audienceDefault: string;
@@ -33,6 +41,17 @@ export interface AppConfig {
     accessTokenTtl: number;
     /** Refresh-token TTL in seconds (default: 30 days). */
     refreshTokenTtl: number;
+  };
+
+  /**
+   * 2026-10-19 audit fix C1: MFA-pending login tokens. When a user with
+   * MFA enabled completes only the first factor, login returns an
+   * `mfaToken` (JWT, scope `mfa:verify`) instead of a refresh token.
+   * This is the TTL of that pending token in seconds.
+   */
+  mfa: {
+    /** MFA-pending token TTL in seconds (default: 600 = 10 minutes). */
+    pendingTokenTtlSeconds: number;
   };
 
   database: {
@@ -125,8 +144,20 @@ export interface AppConfig {
      * header instead of the socket address. Default 1 (works for
      * AWS ALB / nginx / Cloudflare). Set to 0 to disable (direct
      * connections only).
+     *
+     * PUBLIC listener only — the admin listener reads
+     * `adminTrustProxyHops` below (audit 2026-10-19 H-11).
      */
     trustProxyHops: number;
+    /**
+     * Audit 2026-10-19 H-11: trusted proxy hops for the ADMIN
+     * listener, separate from the public one. Defaults to 0 —
+     * the admin port must not honor X-Forwarded-For unless the
+     * operator explicitly configures the number of hops in front
+     * of it (a default of 1 lets any directly-reachable client
+     * spoof `X-Forwarded-For: 127.0.0.1` past the IP allowlist).
+     */
+    adminTrustProxyHops: number;
   };
 
   /**
@@ -155,7 +186,7 @@ export interface AppConfig {
     signingKeyTtlDays: number;
     /** Recovery codes: delete when `usedAt < now() - ttl`. */
     recoveryCodeTtlDays: number;
-    /** Outbox events: delete when `processedAt < now() - ttl`. */
+    /** Outbox events: delete when `processedAt < now() - ttl`. Dead-lettered rows (stuck pending with exhausted attempts) are purged on `createdAt < now() - ttl` as well. */
     outboxTtlDays: number;
     /**
      * V1.7 audit fix #38: audit_logs retention. IP addresses are
@@ -222,11 +253,25 @@ export const configuration = (): AppConfig => {
       // Fail-secure default for dev. In production, the Joi validator
       // requires an explicit value (32+ chars).
       'dev-only-insecure-default-please-override-32chars',
+    mfaSecretKey:
+      process.env.MFA_SECRET_KEY ??
+      // Fail-secure default for dev (distinct from TOKEN_SECRET so the
+      // two keys are not correlated). In production, the Joi validator
+      // requires an explicit value (32+ chars).
+      'dev-only-mfa-secret-key-please-override-32chars',
     jwt: {
       issuer: process.env.JWT_ISSUER ?? 'cerberus',
       audienceDefault: process.env.JWT_AUDIENCE_DEFAULT ?? 'cerberus-clients',
       accessTokenTtl: Number(process.env.ACCESS_TOKEN_TTL ?? 900),
       refreshTokenTtl: Number(process.env.REFRESH_TOKEN_TTL ?? 2_592_000),
+    },
+
+    mfa: {
+      // 2026-10-19 audit fix C1: TTL of the mfaToken issued at login
+      // when the user still owes a second factor. 10 minutes is enough
+      // for a user to open their authenticator app; short enough that a
+      // leaked pending token expires quickly.
+      pendingTokenTtlSeconds: Number(process.env.MFA_PENDING_TOKEN_TTL ?? 600),
     },
 
     database: {
@@ -243,10 +288,13 @@ export const configuration = (): AppConfig => {
       apiKeyHash: process.env.ADMIN_API_KEY_HASH ?? '',
       lookupSecret:
         process.env.ADMIN_LOOKUP_SECRET ??
-        // Fail-secure default: deterministic in dev so the same key
-        // produces the same lookupToken across restarts. In production
-        // this MUST be set explicitly (Joi validation requires it).
-        'dev-only-insecure-default-please-override',
+        // Dev default — the SAME 32-char string the Joi schema in
+        // env.validation.ts uses (a divergent shorter fallback used
+        // to live here; audit 2026-10-19 config LOWs). Joi runs
+        // before this factory and rejects this default (plus any
+        // other value, if unset) when NODE_ENV=production, so this
+        // line is unreachable in a validated production boot.
+        'dev-only-insecure-default-please-override-32chars',
       ipAllowlist: splitCsv(process.env.ADMIN_IP_ALLOWLIST),
     },
 
@@ -298,8 +346,12 @@ export const configuration = (): AppConfig => {
       // 30s response timeout — handlers that take longer than this
       // are pathological and should fail loud, not hang.
       responseTimeoutMs: Number(process.env.HTTP_RESPONSE_TIMEOUT_MS ?? 30_000),
-      // V1.7 audit fix #12
+      // V1.7 audit fix #12 — public listener only (default 1).
       trustProxyHops: Number(process.env.TRUST_PROXY_HOPS ?? 1),
+      // Audit 2026-10-19 H-11 — admin listener is separate and
+      // defaults to 0 (never trust XFF on the admin port unless
+      // the operator explicitly configures hops).
+      adminTrustProxyHops: Number(process.env.ADMIN_TRUST_PROXY_HOPS ?? 0),
     },
 
     cleanup: {
@@ -329,6 +381,12 @@ export const configuration = (): AppConfig => {
     },
 
     graphql: {
+      // The environment-dependent DEFAULTS live in env.validation.ts
+      // (cross-field `when` on NODE_ENV: false in production, true
+      // otherwise) — not here. By the time this factory runs, Joi has
+      // already assigned the resolved default into process.env, so
+      // this reads the validated value; an explicit operator override
+      // in either direction is honored.
       introspectionEnabled:
         (process.env.GRAPHQL_INTROSPECTION ?? 'true').toLowerCase() === 'true',
       playgroundEnabled:

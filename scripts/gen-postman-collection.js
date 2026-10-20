@@ -153,18 +153,28 @@ if (json && typeof json === "object") {
 
 const SAVE_BEARER = `
 const json = pm.response.json();
-if (json.access_token) {
-  pm.collectionVariables.set("bearerToken", json.access_token);
-  pm.collectionVariables.set("expiresIn", json.expires_in);
+// REST endpoints return camelCase; the OAuth2 token endpoint returns
+// RFC 6749 snake_case. Accept both.
+const accessToken = json.accessToken ?? json.access_token;
+const refreshToken = json.refreshToken ?? json.refresh_token;
+if (accessToken) {
+  pm.collectionVariables.set("bearerToken", accessToken);
+  pm.collectionVariables.set("expiresIn", json.expiresIn ?? json.expires_in);
 }
-if (json.refresh_token) {
-  pm.collectionVariables.set("refreshToken", json.refresh_token);
+if (refreshToken) {
+  pm.collectionVariables.set("refreshToken", refreshToken);
 }
 `.trim();
 
 const LOGIN_TEST = `${STANDARD_TESTS}\n${SAVE_BEARER}\n` +
-  `pm.collectionVariables.set("currentSessionId", pm.response.json().sessionId);\n` +
-  `pm.collectionVariables.set("currentFamilyId", pm.response.json().familyId);`;
+  `const j = pm.response.json();\n` +
+  `pm.collectionVariables.set("currentSessionId", j.sessionId);\n` +
+  `pm.collectionVariables.set("currentFamilyId", j.familyId);\n` +
+  `// MFA-pending contract (V1.7): no tokens, but an mfaToken + sessionId.\n` +
+  `if (j.mfaRequired) {\n` +
+  `  pm.collectionVariables.set("mfaToken", j.mfaToken);\n` +
+  `  pm.collectionVariables.set("mfaSessionId", j.sessionId);\n` +
+  `}`;
 
 const REQUIRE_AUTH = `
 pm.test("Authenticated request succeeded", () => {
@@ -220,7 +230,7 @@ const authFolder = folder('Auth', [
     req('POST /v1/auth/login', {
       method: 'POST',
       path: '/v1/auth/login',
-      description: 'Authenticate with email + password. Returns a sessionId and familyId for the new session.',
+      description: 'Authenticate with email + password. Returns a sessionId and familyId for the new session. MFA-enabled users: omit mfaCode to get the MFA-pending response {mfaRequired:true, mfaToken, sessionId} (complete it via POST /v1/identity/mfa/verify), or pass a 6-digit mfaCode to finish in one round-trip.',
       headers: [{ key: 'Content-Type', value: 'application/json' }],
       body: {
         mode: 'raw',
@@ -480,18 +490,18 @@ const identityFolder = folder('Identity', [
     req('POST /v1/identity/mfa/verify', {
       method: 'POST',
       path: '/v1/identity/mfa/verify',
-      description: 'Verify a TOTP or recovery code. Returns {matched: "totp" | "recovery"}.',
+      description: 'Complete the pending second factor for an MFA-enabled login. Body: {sessionId, code} where sessionId comes from the MFA-pending login response (captured as {{mfaSessionId}}). Post-C1 contract: returns the real token pair {accessToken, refreshToken, mfaVerified:true} on success.',
       headers: [
-        { key: 'Authorization', value: '{{userId}}' },
+        { key: 'Authorization', value: 'Bearer {{mfaToken}}' },
         { key: 'Content-Type', value: 'application/json' },
       ],
       body: {
         mode: 'raw',
-        raw: JSON.stringify({ code: '{{totpCode}}' }, null, 2),
+        raw: JSON.stringify({ sessionId: '{{mfaSessionId}}', code: '{{totpCode}}' }, null, 2),
         options: { language: { json: {} } },
       },
       prerequest: TOTP_PREREQUEST,
-      tests: STANDARD_TESTS,
+      tests: `${STANDARD_TESTS}\n${SAVE_BEARER}`,
     }),
   ]),
 ]);

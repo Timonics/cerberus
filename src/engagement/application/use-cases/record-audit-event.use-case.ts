@@ -19,6 +19,13 @@ export interface RecordAuditEventInput {
   userId: string | null;
   eventType: string;
   payload: Readonly<Record<string, unknown>>;
+  /**
+   * V1.8 audit fix H-10: id of the originating domain event, when
+   * this row is written by an event handler. Combined with
+   * `eventType` in a DB unique constraint so an outbox re-publish
+   * collides instead of duplicating the row. Omit for direct writes.
+   */
+  eventId?: string | null;
   ipAddress?: string | null;
   userAgent?: string | null;
 }
@@ -41,6 +48,7 @@ export class RecordAuditEventUseCase {
   public async execute(input: RecordAuditEventInput): Promise<AuditLog> {
     const entry = AuditLog.create({
       id: this.idGenerator.generate(),
+      eventId: input.eventId ?? null,
       userId: input.userId,
       eventType: AuditEventType.create(input.eventType),
       payload: input.payload,

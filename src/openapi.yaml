@@ -214,7 +214,19 @@ paths:
   /v1/identity/mfa/verify:
     post:
       tags: [Identity]
-      summary: Verify a second factor (TOTP or recovery code)
+      summary: Complete an MFA-pending login (TOTP or recovery code)
+      description: |
+        Called after `POST /v1/auth/login` returned
+        `{ mfaRequired: true, mfaToken, sessionId }`. Send the
+        `mfaToken` as the bearer — it carries the `mfa:verify` scope
+        (a normal access token with `auth:write` is also accepted for
+        step-up flows).
+
+        On success returns the real token pair
+        `{ accessToken, refreshToken, mfaVerified: true }` — a fresh
+        refresh token is rotated onto the session. 5 bad codes against
+        the same (user, session) pair locks verification for 15 minutes
+        (401 `identity.mfa.locked`). Throttled at 5 requests/min/IP.
       requestBody:
         required: true
         content:
@@ -222,10 +234,15 @@ paths:
             schema: { $ref: '#/components/schemas/VerifyMfaInput' }
       responses:
         '200':
-          description: Code verified
+          description: MFA verified — token pair issued
           content:
             application/json:
               schema: { $ref: '#/components/schemas/VerifyMfaResult' }
+        '401':
+          description: Verification locked (5 failures / 15 min)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainError' }
         '422':
           description: Code invalid or MFA not enabled
           content:
@@ -238,7 +255,12 @@ paths:
       summary: Login (password grant + app-bound)
       description: |
         Returns refreshToken + accessToken (V1.5) + sessionId + userId.
-        If MFA is enabled but not yet verified, mfaRequired is true.
+        If MFA is enabled but not yet verified, the response is
+        `{ mfaRequired: true, mfaToken, sessionId }` — refreshToken and
+        accessToken are null and no tokens are issued until
+        POST /v1/identity/mfa/verify completes. Supplying a valid
+        `mfaCode` inline in the login body completes MFA in one
+        round-trip with the normal token response.
 
         For app-bound login, include X-Cerberus-App-Id and X-Cerberus-App-Secret
         headers. New users register against the app's defaultOrgSlug;
@@ -282,6 +304,15 @@ paths:
       description: |
         Submit a refresh token, receive a new one. Reuse detection
         mass-revokes the family. Returns a fresh accessToken too (V1.5).
+
+        Idempotent-retry grace: the SAME token presented again within
+        60s of the rotation returns the current pair instead of
+        revoking the family (absorbs double-submits / client retries).
+        After the grace window, reuse mass-revokes the family and
+        returns 401 `authentication.session.not_found` (deliberately
+        ambiguous). Sessions whose MFA verification is still pending
+        return 401 `authentication.mfa.required` — a password alone
+        can never yield a token.
       security: []
       requestBody:
         required: true
@@ -741,20 +772,27 @@ components:
 
     VerifyMfaInput:
       type: object
-      required: [code]
+      required: [sessionId, code]
       properties:
-        code: { type: string }
-        mfaToken:
+        sessionId:
           type: string
+          format: uuid
+          description: The sessionId from the MFA-pending login response.
+        code:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 6-digit TOTP code or 10-char recovery code.
 
     VerifyMfaResult:
       type: object
+      required: [accessToken, refreshToken, mfaVerified]
       properties:
-        matched:
+        accessToken: { type: string }
+        refreshToken:
           type: string
-          enum: [totp, recovery_code]
-        recoveryCodesRemaining:
-          type: integer
+          description: Freshly rotated onto the session — the pending login issued none.
+        mfaVerified: { type: boolean }
 
     UserView:
       type: object
@@ -778,7 +816,11 @@ components:
         email: { type: string, format: email }
         password: { type: string, format: password }
         userAgent: { type: string }
-        ipAddress: { type: string, format: ipv4 }
+        mfaCode:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 'Inline TOTP second factor for MFA-enabled users — completes login in one round-trip. Omit to receive the MFA-pending response instead.'
 
     LoginResult:
       type: object
@@ -793,6 +835,9 @@ components:
         expiresAt: { type: string, format: date-time }
         organizationId: { type: string, format: uuid, nullable: true }
         mfaRequired: { type: boolean }
+        mfaToken:
+          type: string
+          description: 'Present only when mfaRequired=true — scoped JWT (scope mfa:verify) for POST /v1/identity/mfa/verify. Never present alongside the token pair.'
       required: [refreshToken, sessionId, userId, familyId, expiresAt, mfaRequired]
 
     RefreshResult:

@@ -75,6 +75,7 @@ describe('EngagementAuditLogHandler', () => {
     await bus.publishAll([ev]);
     expect(recordAudit).toHaveBeenCalledWith({
       userId: 'user-1',
+      eventId: 'ev-1',
       eventType: 'engagement.email_verification.requested',
       payload: { verificationId: 'verif-1' },
     });
@@ -90,6 +91,7 @@ describe('EngagementAuditLogHandler', () => {
     await bus.publishAll([ev]);
     expect(recordAudit).toHaveBeenCalledWith({
       userId: 'user-1',
+      eventId: 'ev-1',
       eventType: 'engagement.email_verification.completed',
       payload: { verificationId: 'verif-1' },
     });
@@ -106,6 +108,7 @@ describe('EngagementAuditLogHandler', () => {
     await bus.publishAll([ev]);
     expect(recordAudit).toHaveBeenCalledWith({
       userId: 'user-1',
+      eventId: 'ev-1',
       eventType: 'engagement.password_reset.requested',
       payload: { resetId: 'reset-1' },
     });
@@ -121,6 +124,7 @@ describe('EngagementAuditLogHandler', () => {
     await bus.publishAll([ev]);
     expect(recordAudit).toHaveBeenCalledWith({
       userId: 'user-1',
+      eventId: 'ev-1',
       eventType: 'engagement.password_reset.completed',
       payload: { resetId: 'reset-1' },
     });

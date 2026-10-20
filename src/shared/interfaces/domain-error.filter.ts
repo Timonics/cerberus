@@ -84,6 +84,7 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'identity.organization.name_required':
       case 'identity.organization.name_too_long':
       case 'identity.organization.description_too_long':
+      case 'app.scope.invalid': // V1.7 (audit H-3): unknown scope at app registration
         return HttpStatus.BAD_REQUEST;
 
       // 401 — unauthenticated / bad credentials
@@ -111,7 +112,9 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'app.api_key.expired':
       case 'app.api_key.not_found':
       case 'app.api_key.invalid':
+      case 'app.credentials.invalid': // V1.7 (audit H-3): uniform app-credential failure — callers that need ambiguity rethrow, but map defensively
       case 'authentication.token.missing':
+      case 'authentication.mfa.required':
         return HttpStatus.UNAUTHORIZED;
 
       case 'admin.ip_not_allowed':
@@ -131,6 +134,7 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'admin.user.mfa_not_enabled':
       case 'app.not_found':
       case 'app.organization.not_found':
+      case 'identity.organization.not_found': // V1 pinned-org token issuance: caller asked for a tenant that does not exist
         return HttpStatus.NOT_FOUND;
 
       // 409 — conflict
@@ -138,6 +142,7 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'identity.credential.locked':
       case 'identity.organization.slug_taken':
       case 'identity.mfa.already_enabled':
+      case 'admin.key.last_active': // refusing to revoke the last active admin key
       case 'domain.invariant_violation':
       case 'domain.illegal_state':
         return HttpStatus.CONFLICT;

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   HealthIndicatorResult,
   HealthIndicatorService,
@@ -18,6 +18,8 @@ import { PrismaService } from '../../prisma/prisma.service';
  */
 @Injectable()
 export class PostgresHealthIndicator {
+  private readonly logger = new Logger(PostgresHealthIndicator.name);
+
   public constructor(
     private readonly healthIndicatorService: HealthIndicatorService,
     private readonly prisma: PrismaService,
@@ -32,8 +34,14 @@ export class PostgresHealthIndicator {
       await this.prisma.$queryRawUnsafe('SELECT 1');
       return indicator.up({ responseTimeMs: Date.now() - start });
     } catch (err) {
+      // Audit 2026-10-19: /ready is unauthenticated — the response body
+      // must not leak raw Prisma/driver error strings (connection URLs,
+      // hostnames, schema details). Log the detail server-side only.
+      this.logger.error(
+        `Postgres readiness probe failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return indicator.down({
-        message: err instanceof Error ? err.message : 'unknown error',
+        message: 'database unreachable',
         responseTimeMs: Date.now() - start,
       });
     }

@@ -2,6 +2,7 @@ import { Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
+import { APP_GUARD } from '@nestjs/core';
 import { join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
 import { AppConfig } from '../config/configuration';
@@ -9,6 +10,8 @@ import { AuthorizationModule } from '../authorization/authorization.module';
 import { GraphqlContext, populateGraphqlAuth } from './graphql-context';
 import { VerifyAccessTokenUseCase } from '../authorization/application/use-cases/verify-access-token.use-case';
 import { GraphqlDomainErrorFilter } from './graphql-domain-error.filter';
+import { GraphqlThrottleGuard } from './guards/graphql-throttle.guard';
+import { createFieldCountLimitRule } from './validation/field-count-limit.rule';
 
 /**
  * GraphQL module.
@@ -20,7 +23,17 @@ import { GraphqlDomainErrorFilter } from './graphql-domain-error.filter';
  * Auth: every request runs through `populateGraphqlAuth`, which
  * extracts the bearer token, verifies it (via the same path as the
  * REST `JwtAuthGuard`), and attaches the decoded claims to the
- * context. Resolvers access claims via `@CurrentUser()`.
+ * context. Resolvers access claims via `@CurrentUser()`. App-bound
+ * tokens (`typ: 'app'`) are rejected by that verification and can
+ * never populate the user context.
+ *
+ * Rate limiting: `GraphqlThrottleGuard` is registered as a global
+ * guard (audit H-6) — per-IP + per-email Redis counters covering
+ * every operation, mirroring the REST `ThrottleGuard` caps.
+ *
+ * Query-size cap: `createFieldCountLimitRule` limits each operation
+ * to 100 field selections (aliases count individually) to blunt
+ * alias-batching DoS.
  *
  * The SDL `typePaths` probe (see `resolveTypePaths`) is what makes
  * the module robust to `build:clean` — without it, wiping `dist/`
@@ -53,6 +66,11 @@ import { GraphqlDomainErrorFilter } from './graphql-domain-error.filter';
           playground: playgroundEnabled,
           introspection: introspectionEnabled,
           plugins: [],
+          // V1.7 (audit, GraphQL MEDIUM): cap the total field count
+          // per operation (aliases included) to blunt alias-batching
+          // DoS — N aliased selections used to mean N sequential
+          // resolver round-trips inside one HTTP request.
+          validationRules: [createFieldCountLimitRule()],
           // V1.5 (audit L-5): register the GqlExceptionFilter for
           // DomainError so resolvers' errors surface with stable
           // extensions.code (and .domainCode). Without this,
@@ -75,6 +93,7 @@ import { GraphqlDomainErrorFilter } from './graphql-domain-error.filter';
                 role: claims.role,
                 scopes: claims.scopes,
                 jti: claims.jti,
+                typ: claims.tokenType,
               };
             });
             return ctx;
@@ -116,6 +135,17 @@ import { GraphqlDomainErrorFilter } from './graphql-domain-error.filter';
     }),
   ],
   exports: [GraphQLModule],
+  providers: [
+    // V1.7 (audit H-6): global GraphQL rate limiting. Registered
+    // as an APP_GUARD so every field resolution (public queries
+    // and mutations alike) passes through it; the guard no-ops on
+    // non-GraphQL contexts. RedisService resolves from the global
+    // RedisModule.
+    {
+      provide: APP_GUARD,
+      useClass: GraphqlThrottleGuard,
+    },
+  ],
 })
 export class GraphqlModule implements NestModule {
   public configure(): void {

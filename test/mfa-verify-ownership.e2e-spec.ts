@@ -14,11 +14,13 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import request from 'supertest';
 import { authenticator } from 'otplib';
 import { PrismaClient } from '@prisma/client';
 import { randomBytes as crypto_randomBytes, randomUUID } from 'node:crypto';
 import { PublicTestModule } from './public-test.module';
+import { TotpSecretCipher } from '../src/identity/infrastructure/security/totp-secret-cipher';
 import { teardown, uniqueEmail } from './harness';
 
 describe('mfa/verify session-ownership check (V1.7 audit fix #7)', () => {
@@ -82,7 +84,10 @@ describe('mfa/verify session-ownership check (V1.7 audit fix #7)', () => {
     const enableRes = await request(app.getHttpServer())
       .post('/v1/identity/mfa/enable')
       .set('Authorization', `Bearer ${attackerToken}`)
-      .send({})
+      // 2026-10-19 audit MEDIUM: enrollment now requires the current
+      // password (fresh auth) — a stolen bearer token alone cannot
+      // enable MFA.
+      .send({ currentPassword: attackerPassword })
       .expect(200);
     const attackerSecret = bodyOf<{ secret: string }>(enableRes).secret;
     const totpCode = authenticator.generate(attackerSecret);
@@ -166,13 +171,16 @@ describe('mfa/verify session-ownership check (V1.7 audit fix #7)', () => {
   });
 
   it('attacker cannot mark victim’s session as MFA-verified via /v1/identity/mfa/verify', async () => {
-    // Fetch the attacker's TOTP secret (stored as base32 plaintext
-    // in the `secret` column of `mfa_secrets`).
+    // Fetch the attacker's TOTP secret. Post-H-5a the `secret` column
+    // holds AES-256-GCM ciphertext (`v1:...`) — decrypt it through
+    // the same cipher the app uses before feeding it to otplib.
     const mfaRow = await prisma.mfaSecret.findUnique({
       where: { userId: attackerId },
     });
     if (!mfaRow) throw new Error('attacker MFA row missing');
-    const attackerTotp = authenticator.generate(mfaRow.secret);
+    const cipher = new TotpSecretCipher(app.get(ConfigService));
+    const attackerSecret = cipher.decrypt(mfaRow.secret);
+    const attackerTotp = authenticator.generate(attackerSecret);
 
     // The attacker already has a session from beforeAll (the one
     // whose JWT we captured as `attackerToken`). Use that directly.
@@ -220,15 +228,29 @@ describe('mfa/verify session-ownership check (V1.7 audit fix #7)', () => {
 
     // 5. Positive control: attacker CAN verify their own session.
     // Proves the ownership check is per-call, not globally broken.
+    // NOTE: TOTP used-step replay protection (RFC 6238 §5.2) claims
+    // the time step on the attack call above, so we MUST mint a fresh
+    // code here. authenticator.generate returns the SAME code while
+    // the 30s step is unchanged — wait for the step to roll over
+    // (up to 30s) before generating, else replay protection 401s
+    // the positive control.
+    let freshTotp = authenticator.generate(attackerSecret);
+    while (freshTotp === attackerTotp) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      freshTotp = authenticator.generate(attackerSecret);
+    }
     const ownRes = await request(app.getHttpServer())
       .post('/v1/identity/mfa/verify')
       .set('Authorization', `Bearer ${attackerToken}`)
-      .send({ sessionId: attackerSessionId, code: attackerTotp })
+      .send({ sessionId: attackerSessionId, code: freshTotp })
       .expect(200);
-    expect(ownRes.body.matched).toBe('totp');
+    // Post-C1 contract: mfa/verify returns the real token pair.
+    expect(ownRes.body.mfaVerified).toBe(true);
+    expect(ownRes.body.accessToken).toBeTruthy();
+    expect(ownRes.body.refreshToken).toBeTruthy();
     const attackerSession = await prisma.session.findUnique({
       where: { id: attackerSessionId },
     });
-    expect(attackerSession!.mfaVerified).not.toBeNull();
-  });
+    expect(attackerSession!.mfaVerified).toBe(true);
+  }, 60000);
 });

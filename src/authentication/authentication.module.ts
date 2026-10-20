@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { ListSessionsUseCase } from './application/use-cases/list-sessions.use-case';
 import { LoginUseCase } from './application/use-cases/login.use-case';
 import { LogoutUseCase } from './application/use-cases/logout.use-case';
+import { MintMfaPendingTokenUseCase } from './application/use-cases/mint-mfa-pending-token.use-case';
 import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case';
 import { RevokeSessionUseCase } from './application/use-cases/revoke-session.use-case';
 import { PasswordChangedSessionRevoker } from './application/event-handlers/password-changed.handler';
@@ -15,6 +16,11 @@ import {
   REFRESH_TOKEN_GENERATOR,
   RandomRefreshTokenGenerator,
 } from './infrastructure/security/refresh-token-generator';
+// 2026-10-19 audit fix C1: LoginUseCase verifies an inline mfaCode
+// through the SAME TotpService instance VerifySecondFactorUseCase
+// uses (IdentityModule provides its own copy; both wrap otplib with
+// identical config, and B2 hardens that service for both paths).
+import { TotpService } from '../identity/infrastructure/security/totp.service';
 
 /**
  * Authentication bounded context — Nest wiring.
@@ -47,6 +53,8 @@ import {
     },
     LockoutPolicy,
 
+    TotpService,
+    MintMfaPendingTokenUseCase,
     LoginUseCase,
     RefreshSessionUseCase,
     LogoutUseCase,

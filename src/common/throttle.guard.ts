@@ -168,10 +168,15 @@ export class ThrottleGuard {
    * boundary with class-validator; here we just need "looks like
    * an email and isn't garbage". Returns null if missing or
    * clearly invalid (so a non-email route doesn't get gated).
+   *
+   * 2026-10-19 audit fix H-8: the OAuth password grant carries the
+   * identifier in `username` (RFC 6749), not `email` — the per-email
+   * bucket never fired on /v1/oauth/token. Fall back to username so
+   * both transports land in the same bucket.
    */
   private extractEmail(body: ThrottleRequest['body']): string | null {
     if (!body) return null;
-    const raw = body['email'];
+    const raw = body['email'] ?? body['username'];
     if (typeof raw !== 'string') return null;
     const trimmed = raw.trim().toLowerCase();
     // Permissive check — class-validator owns the real validation.

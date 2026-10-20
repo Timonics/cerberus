@@ -22,8 +22,31 @@ type PrismaTx = Prisma.TransactionClient | PrismaClient;
  */
 @Injectable()
 export class PrismaSessionRepository extends SessionRepository {
+  /**
+   * Whether the generated Prisma client knows the `lastRotatedAt`
+   * column. Null = not yet probed; true/false cached after the first
+   * write attempt. The column ships via migration
+   * `20261019_b1_refresh_grace`; the generated client only learns it
+   * after the schema owner adds it to schema.prisma and regenerates.
+   * While false, writes degrade gracefully (no grace timestamp) rather
+   * than failing the rotation.
+   */
+  private lastRotatedAtWritable: boolean | null = null;
+
   public constructor(private readonly prisma: PrismaService) {
     super();
+  }
+
+  /**
+   * True when the error is Prisma rejecting `lastRotatedAt` as an
+   * unknown argument — i.e. the generated client predates the column.
+   * Any other validation error re-throws.
+   */
+  private static isMissingLastRotatedAtColumn(err: unknown): boolean {
+    return (
+      err instanceof Prisma.PrismaClientValidationError &&
+      err.message.includes('lastRotatedAt')
+    );
   }
 
   public async findById(tx: Tx, id: SessionId): Promise<Session | null> {
@@ -39,6 +62,22 @@ export class PrismaSessionRepository extends SessionRepository {
     const client = tx as PrismaTx;
     const row = await client.session.findUnique({
       where: { refreshHash },
+    });
+    return row ? this.toDomain(row) : null;
+  }
+
+  public async findByPreviousHash(
+    tx: Tx,
+    refreshHash: string,
+  ): Promise<Session | null> {
+    const client = tx as PrismaTx;
+    // GIN-free array membership: Prisma compiles `has` to
+    // `previousRefreshHashes @> ARRAY[...]` (Postgres array contains).
+    const row = await client.session.findFirst({
+      where: {
+        previousRefreshHashes: { has: refreshHash },
+        revokedAt: null,
+      },
     });
     return row ? this.toDomain(row) : null;
   }
@@ -78,20 +117,59 @@ export class PrismaSessionRepository extends SessionRepository {
       revokedAt: session.revokedAt,
       revokeReason: session.revokeReason,
     };
-    const row = await client.session.upsert({
-      where: { id: session.id.value },
-      create: data,
-      update: {
-        refreshHash: data.refreshHash,
-        expiresAt: data.expiresAt,
-        lastUsedAt: data.lastUsedAt,
-        previousRefreshHashes: data.previousRefreshHashes,
-        mfaVerified: data.mfaVerified,
-        revokedAt: data.revokedAt,
-        revokeReason: data.revokeReason,
-      },
-    });
-    return this.toDomain(row);
+    const update = {
+      refreshHash: data.refreshHash,
+      expiresAt: data.expiresAt,
+      lastUsedAt: data.lastUsedAt,
+      // 2026-10-19 audit fix H-7: persist the rotation timestamp so
+      // the grace window survives restarts. Conditional on the
+      // generated client knowing the column (see lastRotatedAtWritable).
+      ...(session.lastRotatedAt !== null && this.lastRotatedAtWritable !== false
+        ? { lastRotatedAt: session.lastRotatedAt }
+        : {}),
+      previousRefreshHashes: data.previousRefreshHashes,
+      mfaVerified: data.mfaVerified,
+      revokedAt: data.revokedAt,
+      revokeReason: data.revokeReason,
+    };
+    try {
+      const row = await client.session.upsert({
+        where: { id: session.id.value },
+        create: data,
+        update,
+      });
+      if (session.lastRotatedAt !== null) {
+        this.lastRotatedAtWritable = true;
+      }
+      return this.toDomain(row);
+    } catch (err) {
+      if (
+        session.lastRotatedAt === null ||
+        !PrismaSessionRepository.isMissingLastRotatedAtColumn(err)
+      ) {
+        throw err;
+      }
+      // The generated Prisma client predates the lastRotatedAt column
+      // (the schema owner adds it to schema.prisma + regenerates; the
+      // DB column comes from migration 20261019_b1_refresh_grace).
+      // Degrade gracefully: the write succeeds without the grace
+      // timestamp instead of failing the whole save.
+      this.lastRotatedAtWritable = false;
+      const row = await client.session.upsert({
+        where: { id: session.id.value },
+        create: data,
+        update: {
+          refreshHash: update.refreshHash,
+          expiresAt: update.expiresAt,
+          lastUsedAt: update.lastUsedAt,
+          previousRefreshHashes: update.previousRefreshHashes,
+          mfaVerified: update.mfaVerified,
+          revokedAt: update.revokedAt,
+          revokeReason: update.revokeReason,
+        },
+      });
+      return this.toDomain(row);
+    }
   }
 
   public async markMfaVerified(
@@ -113,6 +191,7 @@ export class PrismaSessionRepository extends SessionRepository {
       refreshHash: string;
       expiresAt: Date;
       lastUsedAt: Date;
+      lastRotatedAt: Date;
       previousRefreshHashes: ReadonlyArray<string>;
     },
   ): Promise<boolean> {
@@ -123,19 +202,51 @@ export class PrismaSessionRepository extends SessionRepository {
     // COMMITTED, two concurrent rotations can both pass an earlier
     // findByRefreshHash() check, but only one updateMany succeeds —
     // the second's WHERE clause sees the new hash and updates zero
-    // rows. count === 0 ⇒ reuse detected.
+    // rows. The use-case then re-reads the row and classifies the
+    // attempt (grace retry vs compromise) instead of mass-revoking.
+    const where = {
+      refreshHash: currentHash,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    };
+    const baseData = {
+      refreshHash: next.refreshHash,
+      expiresAt: next.expiresAt,
+      lastUsedAt: next.lastUsedAt,
+      previousRefreshHashes: [...next.previousRefreshHashes],
+    };
+
+    if (this.lastRotatedAtWritable !== false) {
+      try {
+        const result = await client.session.updateMany({
+          where,
+          data: {
+            ...baseData,
+            // 2026-10-19 audit fix H-7: stamp the rotation so a
+            // concurrent loser's retry can be classified against the
+            // 60-second grace window.
+            ...{ lastRotatedAt: next.lastRotatedAt },
+          },
+        });
+        this.lastRotatedAtWritable = true;
+        return result.count === 1;
+      } catch (err) {
+        if (!PrismaSessionRepository.isMissingLastRotatedAtColumn(err)) {
+          throw err;
+        }
+        // The generated Prisma client predates the lastRotatedAt column
+        // (the schema owner adds it to schema.prisma + regenerates; the
+        // DB column comes from migration 20261019_b1_refresh_grace).
+        // Degrade gracefully: rotation still works, the grace window is
+        // simply unavailable (lastRotatedAt stays null) until the
+        // client is regenerated.
+        this.lastRotatedAtWritable = false;
+      }
+    }
+
     const result = await client.session.updateMany({
-      where: {
-        refreshHash: currentHash,
-        revokedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      data: {
-        refreshHash: next.refreshHash,
-        expiresAt: next.expiresAt,
-        lastUsedAt: next.lastUsedAt,
-        previousRefreshHashes: [...next.previousRefreshHashes],
-      },
+      where,
+      data: baseData,
     });
     return result.count === 1;
   }
@@ -183,6 +294,14 @@ export class PrismaSessionRepository extends SessionRepository {
     issuedAt: Date;
     expiresAt: Date;
     lastUsedAt: Date | null;
+    /**
+     * 2026-10-19 audit fix H-7: rotation timestamp for the grace
+     * window. Optional — the column is added by migration
+     * `20261019_b1_refresh_grace`; rows written before it (and the
+     * generated client before the schema workstream regenerates)
+     * simply don't carry it.
+     */
+    lastRotatedAt?: Date | null;
     /** V1.5: chain of rotated refresh-token hashes (reuse detection). */
     previousRefreshHashes?: string[];
     /** V1.5 (audit C-4): MFA-verified flag. Defaults to true so legacy
@@ -205,6 +324,7 @@ export class PrismaSessionRepository extends SessionRepository {
       issuedAt: row.issuedAt,
       expiresAt: row.expiresAt,
       lastUsedAt: row.lastUsedAt,
+      lastRotatedAt: row.lastRotatedAt ?? null,
       previousRefreshHashes: row.previousRefreshHashes ?? [],
       mfaVerified: row.mfaVerified ?? true,
       revokedAt: row.revokedAt,

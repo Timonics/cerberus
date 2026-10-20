@@ -40,8 +40,18 @@ export class GraphqlAuthGuard implements CanActivate {
     if (!user) {
       throw new UnauthorizedException('Authentication required');
     }
-    if (options?.requireOrgAdmin && !user.scopes.includes('org:admin')) {
-      throw new ForbiddenException('org:admin scope required');
+    if (options?.requireOrgAdmin) {
+      // V1.7 (audit H-3): `requireOrgAdmin` is a USER-principal
+      // check. App-bound tokens are already rejected before the
+      // context is populated; this is defense in depth so a future
+      // caller that opts app tokens into the context can never
+      // satisfy an org-admin check with one.
+      if (user.typ === 'app') {
+        throw new ForbiddenException('User principal required');
+      }
+      if (!user.scopes.includes('org:admin')) {
+        throw new ForbiddenException('org:admin scope required');
+      }
     }
     return true;
   }

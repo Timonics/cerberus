@@ -20,6 +20,15 @@ export interface GraphqlContext {
     readonly role: string | null;
     readonly scopes: ReadonlyArray<string>;
     readonly jti: string;
+    /**
+     * V1.7 (audit H-3): the verified token's `typ` claim. Always
+     * 'user' (or null for legacy tokens) in practice — app-bound
+     * tokens are rejected by `VerifyAccessTokenUseCase` before the
+     * context is populated. Guards check this so an app token can
+     * never satisfy a user-principal check even if a future caller
+     * opts app tokens into context population.
+     */
+    readonly typ: string | null;
   };
 }
 
@@ -42,6 +51,7 @@ export async function populateGraphqlAuth(
     role: string | null;
     scopes: ReadonlyArray<string>;
     jti: string;
+    typ: string | null;
   }>,
 ): Promise<void> {
   const header = context.req.headers.authorization;
@@ -58,7 +68,10 @@ export async function populateGraphqlAuth(
     context.currentUser = claims;
   } catch {
     // Invalid token — leave currentUser undefined. Resolvers that
-    // require auth will throw UNAUTHENTICATED.
+    // require auth will throw UNAUTHENTICATED. V1.7 (audit H-3):
+    // app-bound tokens (typ: 'app') are rejected by the default
+    // VerifyAccessTokenUseCase options, so they never reach the
+    // user context either.
   }
 }
 

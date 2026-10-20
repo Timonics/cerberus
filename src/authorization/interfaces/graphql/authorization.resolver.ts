@@ -32,20 +32,27 @@ export class AuthorizationResolver {
 
   @Query(() => 'AccessTokenClaims', {
     description:
-      'Verify a JWT access token and return its claims. Throws UNAUTHENTICATED for invalid, expired, or unknown-kid tokens.',
+      'Verify a JWT access token and return its real claims (sub/org/role/scope/jti/typ/iss/aud/iat/exp as present in the verified token). Throws UNAUTHENTICATED for invalid, expired, or unknown-kid tokens. App-bound tokens (typ: app) are accepted here — this is the introspection path for resource servers.',
   })
   public async verifyAccessToken(@Args('input') input: VerifyAccessTokenInput) {
-    const claims = await this.verifyTokenUc.execute(input.token);
+    // allowAppTokens: this query IS the resource-server introspection
+    // path — it must report claims for whichever token was presented,
+    // user- or app-bound. User-principal endpoints reject app tokens
+    // by default in VerifyAccessTokenUseCase.
+    const claims = await this.verifyTokenUc.execute(input.token, {
+      allowAppTokens: true,
+    });
     return {
       sub: claims.subject,
       org: claims.organizationId,
       role: claims.role,
       scope: claims.scopes.join(' '),
       jti: claims.jti,
-      iss: 'cerberus',
-      aud: 'cerberus-clients',
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 900,
+      typ: claims.tokenType,
+      iss: claims.issuer,
+      aud: claims.audience,
+      iat: claims.issuedAt,
+      exp: claims.expiresAt,
     };
   }
 }

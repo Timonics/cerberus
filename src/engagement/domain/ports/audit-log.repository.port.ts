@@ -17,11 +17,17 @@ export interface AuditLogTimeRange {
 export abstract class AuditLogRepository {
   public abstract save(tx: Tx, entry: AuditLog): Promise<AuditLog>;
 
+  /**
+   * `offset` is an optional SQL SKIP for pagination (audit 2026-10-19:
+   * the admin search validated `offset` but never passed it through).
+   * Defaults to 0; existing callers are unaffected.
+   */
   public abstract findByUserId(
     tx: Tx,
     userId: UserId,
     limit: number,
     range?: AuditLogTimeRange,
+    offset?: number,
   ): Promise<ReadonlyArray<AuditLog>>;
 
   public abstract findByEventType(
@@ -29,6 +35,7 @@ export abstract class AuditLogRepository {
     eventType: AuditEventType,
     limit: number,
     range?: AuditLogTimeRange,
+    offset?: number,
   ): Promise<ReadonlyArray<AuditLog>>;
 }
 

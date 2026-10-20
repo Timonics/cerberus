@@ -1,10 +1,15 @@
 /**
- * H-1 — Refresh token atomic-rotation contract test.
+ * H-1/H-7 — Refresh token atomic-rotation + idempotent-retry grace.
  *
  * Pins the Prisma persistence contract: that the
  * `SessionRepository.rotateRefreshTokenAtomic()` UPDATE-with-WHERE
- * really is atomic, that a concurrent rotation cannot mint two
- * valid refresh tokens for the same session.
+ * really is atomic (two concurrent rotations cannot BOTH mint new
+ * valid refresh tokens), AND the 2026-10-19 H-7 grace-window contract:
+ * a concurrent double-refresh is now a legitimate idempotent retry —
+ * the loser re-presents the just-rotated hash within the 60-second
+ * grace window and gets a successful response (the same session, no
+ * family mass-revoke). The mass-revoke now only fires OUTSIDE the
+ * grace window (see refresh-reuse.e2e-spec.ts).
  *
  * Pure-domain spec (`session.spec.ts`) covers the aggregate
  * behavior. This test pins the database-level guarantee.
@@ -37,7 +42,7 @@ describe('H-1 — atomic refresh rotation (integration)', () => {
     await teardown();
   });
 
-  it('exactly one of two concurrent rotations succeeds', async () => {
+  it('concurrent double-refresh: one rotates, the other grace-retries — family survives', async () => {
     // First, register a real user via the use-case (so FKs are satisfied).
     const registerUc = ctx.get(RegisterUserUseCase);
     const email = uniqueEmail('h1');
@@ -84,19 +89,43 @@ describe('H-1 — atomic refresh rotation (integration)', () => {
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
     const rejected = results.filter((r) => r.status === 'rejected');
 
-    // The critical invariant: at most one rotation succeeds.
-    // Two-fulfill would mean the race minted two valid refresh
-    // tokens for the same session — the exact H-1 bug.
-    expect(fulfilled.length).toBeLessThanOrEqual(1);
+    // H-7 grace window: a concurrent double-refresh is a legitimate
+    // client retry, so BOTH calls may succeed — the winner rotates,
+    // the loser classifies as a grace retry and gets a successful
+    // response for the same session. What must NEVER happen:
+    //   - zero successes (a legit retry 500ing), or
+    //   - a rejection with a family-compromise code (the false-positive
+    //     mass-revoke H-7 eliminated).
+    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
     expect(fulfilled.length + rejected.length).toBe(2);
+
+    const sessionIds = new Set(
+      fulfilled.map(
+        (r) =>
+          (r as PromiseFulfilledResult<{ sessionId: string }>).value.sessionId,
+      ),
+    );
+    // Both successes (if both) refer to the SAME session.
+    expect(sessionIds.size).toBeLessThanOrEqual(1);
 
     if (rejected.length > 0) {
       const reason = rejected[0].reason as {
         code?: string;
       };
-      // Use-case maps reuse to authentication.session.not_found
-      // for ambiguity (so attackers can't probe).
+      // A rejection here is only acceptable as the ambiguous
+      // not_found (e.g. the loser's read raced the winner's commit in
+      // a way that missed the rotation history). It must NOT be a
+      // compromise/reuse signal.
       expect(reason.code).toBe('authentication.session.not_found');
     }
+
+    // CRITICAL H-7 regression pin: the family was NOT mass-revoked.
+    // Both presentations were legitimate retries within the grace
+    // window. (Pre-fix, the CAS loser mass-revoked the family here.)
+    const after = await txRunner.run(async (tx) =>
+      sessionRepo.findById(tx, sessionId),
+    );
+    expect(after).not.toBeNull();
+    expect(after!.revokedAt).toBeNull();
   }, 30000);
 });

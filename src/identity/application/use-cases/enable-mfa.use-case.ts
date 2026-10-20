@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
 import * as argon2 from 'argon2';
 import {
   CLOCK,
@@ -9,6 +8,8 @@ import {
   EventBus,
   ID_GENERATOR,
   IdGenerator,
+  PASSWORD_HASHER,
+  PasswordHasher,
   TRANSACTION_RUNNER,
   TransactionRunner,
 } from '../../../shared/domain';
@@ -22,11 +23,30 @@ import {
   USER_REPOSITORY,
   UserRepository,
 } from '../../domain/ports/user.repository.port';
+import {
+  CREDENTIAL_REPOSITORY,
+  CredentialRepository,
+} from '../../domain/ports/credential.repository.port';
 import { TotpService } from '../../infrastructure/security/totp.service';
 
 export interface EnableMfaInput {
   userId: string;
+  /**
+   * 2026-10-19 audit MEDIUM (MFA enrollment fresh-auth): the user's
+   * current password. Verified against the credential hash before the
+   * enrollment is created — a stolen bearer token alone can no longer
+   * enable MFA. Timing-equalized with a dummy argon2 verify when the
+   * credential is missing.
+   */
+  currentPassword: string;
 }
+
+// Same pattern as LoginUseCase: a syntactically-valid argon2id hash
+// that verifies false for any plaintext, so the verify path costs the
+// same ~50ms whether or not the credential exists.
+const DUMMY_HASH =
+  '$argon2id$v=19$m=65536,t=3,p=1$ZHVtbXlzYWx0Zm9yY29uc3RhbnR0aW1l' +
+  'Y2hlY2tpbmcAAAAAAAAAAAA$ZPrQq5Z0qJD8m4lpqkS5eZ6xv7h8y9a0b1c2d3e4f5g';
 
 /**
  * Result of `EnableMfaUseCase`.
@@ -63,7 +83,10 @@ export class EnableMfaUseCase {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGenerator,
     @Inject(EVENT_BUS) private readonly eventBus: EventBus,
+    @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasher,
     @Inject(USER_REPOSITORY) private readonly userRepo: UserRepository,
+    @Inject(CREDENTIAL_REPOSITORY)
+    private readonly credentialRepo: CredentialRepository,
     @Inject(MFA_SECRET_REPOSITORY)
     private readonly mfaRepo: MfaSecretRepository,
     private readonly totp: TotpService,
@@ -109,6 +132,22 @@ export class EnableMfaUseCase {
         );
       }
 
+      // Fresh-auth check (audit 2026-10-19): verify the current
+      // password before creating the enrollment. Exactly one argon2
+      // verify call runs either way, so response time doesn't reveal
+      // whether the credential exists.
+      const credential = await this.credentialRepo.findById(tx, userId);
+      const passwordOk = await this.passwordHasher.verify(
+        input.currentPassword,
+        credential ? credential.passwordHash.value : DUMMY_HASH,
+      );
+      if (!credential || !passwordOk) {
+        throw new DomainError(
+          'authentication.invalid_credentials',
+          'Current password is incorrect',
+        );
+      }
+
       // Mint the secret row's ID first so we can backfill the
       // recovery-code FK. We use a UUID so the secret row exists in
       // memory before the FK is set.
@@ -149,7 +188,3 @@ export class EnableMfaUseCase {
     return result;
   }
 }
-
-// Suppress unused-import warning for crypto module — kept for parity with
-// the ID generator convention.
-void randomUUID;

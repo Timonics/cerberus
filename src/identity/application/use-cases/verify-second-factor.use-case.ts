@@ -49,8 +49,13 @@ export interface VerifySecondFactorResult {
  * matched method so the caller can record which one was used.
  *
  * If neither a TOTP code nor a recovery code matches, throws
- * `identity.mfa.code_invalid` (or `identity.mfa.recovery_code_invalid`
- * if a recovery code was attempted but already used).
+ * `identity.mfa.code_invalid` (TOTP) or `identity.mfa.recovery_code_invalid`
+ * (recovery code). Both recovery-code failure modes — no match and
+ * already used — return the SAME generic message (no oracle).
+ *
+ * Successful TOTP verification claims the current time step in Redis
+ * (RFC 6238 §5.2 replay protection); the session is marked
+ * MFA-verified only after the ownership check passes.
  */
 @Injectable()
 export class VerifySecondFactorUseCase {
@@ -85,8 +90,17 @@ export class VerifySecondFactorUseCase {
       const looksLikeRecovery = /^[0-9A-Z]{10}$/i.test(trimmed);
 
       if (looksLikeTotp) {
-        const ok = mfa.verifyTotpCode(trimmed, (s, c) =>
-          this.totp.verifyTotp(s, c),
+        // 2026-10-19 audit MEDIUM (TOTP replay): verify against the
+        // current time step only (otplib default window 0) AND claim
+        // the step in Redis so a code can't be replayed within its
+        // validity window (RFC 6238 §5.2). The aggregate's sync
+        // `verifyTotpCode` wrapper only adds the confirmed-check,
+        // which is already enforced above, so we call the
+        // replay-protected verifier directly here.
+        const ok = await this.totp.verifyTotpFresh(
+          userId.value,
+          mfa.secret,
+          trimmed,
         );
         if (ok) {
           // V1.7 audit fix #7: ownership check BEFORE the side-effect
@@ -170,15 +184,12 @@ export class VerifySecondFactorUseCase {
             sessionId: input.sessionId,
           };
         }
-        if (result.alreadyUsed) {
-          throw new DomainError(
-            'identity.mfa.recovery_code_invalid',
-            'Recovery code has already been used',
-          );
-        }
+        // 2026-10-19 audit LOW: "wrong" vs "used" recovery codes now
+        // return one generic message — distinguishing them was an
+        // oracle that told an attacker they had guessed a valid code.
         throw new DomainError(
           'identity.mfa.recovery_code_invalid',
-          'Recovery code does not match',
+          'Recovery code is invalid',
         );
       }
 

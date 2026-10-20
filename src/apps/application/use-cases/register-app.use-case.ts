@@ -16,6 +16,7 @@ import {
   AppRepository,
 } from '../../domain/ports/app.repository.port';
 import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
+import { assertAppScopes } from '../../domain/value-objects/app-scope';
 
 export interface RegisterAppInput {
   name: string;
@@ -24,7 +25,13 @@ export interface RegisterAppInput {
   contactEmail: string;
   notes?: string;
   ttlSeconds: number;
-  /** V1.6 client_credentials grant: initial OAuth2 scope allowlist. */
+  /**
+   * V1.6 client_credentials grant: initial OAuth2 scope allowlist.
+   * V1.7 (audit H-3): validated against the server-side app-scope
+   * registry — unknown scopes are rejected with `app.scope.invalid`.
+   * Apps can never hold user scopes (`org:admin`, `introspect:read`,
+   * `auth:read`, `auth:write`).
+   */
   initialScopes?: string;
 }
 
@@ -59,6 +66,15 @@ export class RegisterAppUseCase {
   ) {}
 
   public async execute(input: RegisterAppInput): Promise<RegisterAppResult> {
+    // V1.7 (audit H-3): validate the requested scopes against the
+    // server-side app-scope registry BEFORE anything is persisted.
+    // Unknown scopes are rejected (not silently dropped) so a typo
+    // can't leave the operator believing a scope was granted.
+    const validatedScopes =
+      input.initialScopes !== undefined
+        ? assertAppScopes(input.initialScopes).join(',')
+        : undefined;
+
     const plaintextToken = generateAppApiKeyPlaintext();
     const keyHash = await this.hasher.hash(plaintextToken);
 
@@ -83,7 +99,7 @@ export class RegisterAppUseCase {
         clock: this.clock,
         notes: input.notes,
         initialKey,
-        allowedScopes: input.initialScopes,
+        allowedScopes: validatedScopes,
       });
       return this.repo.save(tx, a);
     });

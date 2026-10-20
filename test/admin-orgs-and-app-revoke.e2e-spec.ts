@@ -153,15 +153,14 @@ describe('Admin org creation + app key auto-revoke (integration)', () => {
       expect(oldRow).not.toBeNull();
       expect(oldRow?.revokedAt).not.toBeNull();
 
-      // Verifying the OLD key now throws — the App aggregate
-      // only holds the current (new) key hash, and the old
-      // plaintext doesn't match it.
+      // Verifying the OLD key now throws — V1.7 uniform credential
+      // code (the distinct app.api_key.invalid was an oracle).
       await expect(
         verifyKey.execute({
           appId: appResult.app.id,
           plaintextApiKey: oldPlaintext,
         }),
-      ).rejects.toMatchObject({ code: 'app.api_key.invalid' });
+      ).rejects.toMatchObject({ code: 'app.credentials.invalid' });
 
       // Verifying the NEW key still works.
       const verified3 = await verifyKey.execute({

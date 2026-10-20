@@ -58,27 +58,51 @@ describe('Admin GraphQL query coverage (V1.7)', () => {
   const bodyOf = <T>(res: { body: unknown }): T => res.body as T;
 
   beforeAll(async () => {
-    module = await Test.createTestingModule({
-      imports: [PublicTestModule],
-    }).compile();
-    app = module.createNestApplication();
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
-    app.setGlobalPrefix('v1', {
-      exclude: [
-        { path: 'health', method: 0 },
-        { path: 'ready', method: 0 },
-        { path: '.well-known/jwks.json', method: 0 },
-        'graphql',
-      ],
-    });
-    app.useGlobalFilters(new GraphqlDomainErrorFilter());
-    await app.init();
+    // Boot can race the Prisma engine spawn under parallel-suite
+    // contention on a loaded box ("Engine is not yet connected" from
+    // the napi engine at app.init time — transient). Retry the boot
+    // once before giving up.
+    let lastErr: unknown = null;
+    let booted = false;
+    for (let attempt = 0; attempt < 2 && !booted; attempt++) {
+      try {
+        module = await Test.createTestingModule({
+          imports: [PublicTestModule],
+        }).compile();
+        app = module.createNestApplication();
+        app.useGlobalPipes(
+          new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+          }),
+        );
+        app.setGlobalPrefix('v1', {
+          exclude: [
+            { path: 'health', method: 0 },
+            { path: 'ready', method: 0 },
+            { path: '.well-known/jwks.json', method: 0 },
+            'graphql',
+          ],
+        });
+        app.useGlobalFilters(new GraphqlDomainErrorFilter());
+        await app.init();
+        booted = true;
+      } catch (err) {
+        lastErr = err;
+        try {
+          if (app) await app.close();
+          if (module) await module.close();
+        } catch {
+          // ignore — best-effort cleanup of the half-booted app
+        }
+        app = undefined as unknown as INestApplication;
+        module = undefined as unknown as TestingModule;
+      }
+    }
+    if (!booted) {
+      throw lastErr;
+    }
     prisma = new PrismaClient();
     await prisma.$connect();
 
@@ -141,6 +165,30 @@ describe('Admin GraphQL query coverage (V1.7)', () => {
     const errBody = bodyOf<GraphqlErrorBody>(res);
     expect(errBody.errors).toBeDefined();
     expect(errBody.errors[0].extensions.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('adminUser(id) — cross-tenant lookup is rejected with FORBIDDEN (H-2)', async () => {
+    // A user in a DIFFERENT org must not be readable. Pre-H-2 the
+    // resolver returned any user to any org:admin.
+    const otherReg = await request(app.getHttpServer())
+      .post('/v1/identity/register')
+      .send({ email: uniqueEmail('gql-admin-x'), password })
+      .expect(201);
+    expect(otherReg.body.organizationId).not.toBe(orgId);
+
+    const res = await request(app.getHttpServer())
+      .post('/graphql')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        query: `query AdminUser($id: ID!) {
+          adminUser(id: $id) { id email }
+        }`,
+        variables: { id: otherReg.body.userId },
+      })
+      .expect(200);
+    const errBody = bodyOf<GraphqlErrorBody>(res);
+    expect(errBody.errors).toBeDefined();
+    expect(errBody.errors[0].extensions.code).toBe('FORBIDDEN');
   });
 
   it('adminAuditLog(input) — returns the audit log filtered by userId', async () => {

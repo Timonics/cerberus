@@ -11,6 +11,7 @@ import {
   SessionRepository,
 } from '../../../authentication/domain/ports/session.repository.port';
 import { UserId } from '../../../identity/domain/value-objects/user-id';
+import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 import { IssueAccessTokenUseCase } from './issue-access-token.use-case';
 
 export interface RefreshTokenGrantInput {
@@ -55,6 +56,7 @@ export class RefreshTokenGrantUseCase {
     @Inject(TRANSACTION_RUNNER) private readonly txRunner: TransactionRunner,
     @Inject(SESSION_REPOSITORY) private readonly sessionRepo: SessionRepository,
     private readonly issueAccessTokenUc: IssueAccessTokenUseCase,
+    private readonly recordAuditEventUc: RecordAuditEventUseCase,
   ) {}
 
   public async execute(
@@ -85,15 +87,26 @@ export class RefreshTokenGrantUseCase {
       );
     }
 
-    // V1.5 (audit C-4): if the session requires MFA and hasn't been
-    // verified yet, refuse to issue a fresh access token. The user
-    // must call POST /v1/identity/mfa/verify with the sessionId and
-    // their TOTP / recovery code first. This closes the OAuth2
-    // refresh-token path that previously allowed bypassing MFA after
-    // capturing a stolen password.
+    // V1.5 (audit C-4) + 2026-10-19 audit fix C1: if the session
+    // requires MFA and hasn't been verified yet, refuse to issue a
+    // fresh access token. The user must call
+    // POST /v1/identity/mfa/verify (presenting the mfaToken from
+    // /v1/auth/login) first. This closes the OAuth2 refresh-token
+    // path that previously allowed bypassing MFA after capturing a
+    // stolen password. The error code now matches the REST refresh
+    // path (`authentication.mfa.required`, 401) so clients see one
+    // contract across both transports.
     if (!session.mfaVerified) {
+      await this.recordAuditEventUc.execute({
+        userId: session.userId.value,
+        eventType: 'authentication.mfa.required',
+        payload: {
+          sessionId: session.id.value,
+          outcome: 'refresh_grant_rejected',
+        },
+      });
       throw new DomainError(
-        'authorization.token.invalid',
+        'authentication.mfa.required',
         'Multi-factor authentication required; verify MFA on this session before refreshing',
         { sessionId: session.id.value },
       );

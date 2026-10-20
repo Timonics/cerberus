@@ -21,10 +21,12 @@ export class PrismaTransactionRunner implements TransactionRunner {
   public constructor(private readonly prisma: PrismaService) {}
 
   public async run<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
-    // Prisma's $transaction accepts a callback returning a Promise. Inside,
-    // the `tx` parameter is the transactional client. We hand it to the
-    // callback as `Tx` (opaque); concrete repositories narrow it via
-    // `tx as Prisma.TransactionClient` at the boundary.
-    return this.prisma.$transaction(async (tx) => work(tx));
+    // 20s interactive-transaction ceiling (Prisma default is 5s): argon2id
+    // verification and lock contention on busy hosts can stall a tx past
+    // the default, surfacing raw P2028s to callers. 20s keeps the
+    // still-alive safety net without the false-positive timeouts.
+    return this.prisma.$transaction(async (tx) => work(tx), {
+      timeout: 20_000,
+    });
   }
 }

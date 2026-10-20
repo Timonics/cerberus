@@ -90,6 +90,28 @@ describe('IpAllowlistGuard', () => {
       // → fails closed.
       expect(guard.canActivate(mockContext('127.0.0.1'))).toBe(false);
     });
+
+    it('skips entries with empty octets instead of coercing to 0', () => {
+      // '10.0..5/32' used to parse as 10.0.0.5 (Number('') === 0),
+      // silently widening the allowlist. Now it's malformed → skipped
+      // → the guard has zero valid ranges and fails closed.
+      const guard = new IpAllowlistGuard(mockConfig(['10.0..5/32']));
+      expect(guard.canActivate(mockContext('10.0.0.5'))).toBe(false);
+      expect(guard.canActivate(mockContext('127.0.0.1'))).toBe(false);
+    });
+
+    it('still matches a correct /32 alongside a malformed entry', () => {
+      const guard = new IpAllowlistGuard(
+        mockConfig(['10.0..5/32', '192.168.1.5/32']),
+      );
+      expect(guard.canActivate(mockContext('192.168.1.5'))).toBe(true);
+      expect(guard.canActivate(mockContext('10.0.0.5'))).toBe(false);
+    });
+
+    it('rejects non-decimal octets like 0x10', () => {
+      const guard = new IpAllowlistGuard(mockConfig(['0x10.0.0.1/32']));
+      expect(guard.canActivate(mockContext('16.0.0.1'))).toBe(false);
+    });
   });
 
   describe('missing IP', () => {

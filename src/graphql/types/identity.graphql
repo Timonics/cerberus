@@ -162,6 +162,15 @@ input MfaCodeInput {
 }
 
 """
+Input for `Identity.enableMfa`. The current password is verified
+server-side (fresh auth) before the enrollment is created.
+"""
+input EnableMfaInput {
+  """The user's current password."""
+  currentPassword: String!
+}
+
+"""
 Result of `Identity.enableMfa`. The plaintext secret and recovery codes
 are returned EXACTLY ONCE — the caller MUST display them to the user
 immediately. After this mutation resolves, the server does not retain
@@ -231,9 +240,11 @@ type Query {
   me: User!
 
   """
-  Look up any user by ID. Requires `org:admin` scope (OWNER or ADMIN
-  role). Returns null if the user does not exist OR the caller is not
-  authorized.
+  Look up a user by ID within the caller's organization. Requires
+  `org:admin` scope (OWNER or ADMIN role). Returns null if the user
+  does not exist OR belongs to a different organization — the two
+  cases are indistinguishable by design, so the endpoint can't be
+  used as a cross-tenant user-enumeration oracle.
   """
   getUser(id: ID!): User
 
@@ -251,8 +262,9 @@ type Mutation {
   """
   Register a new user account.
 
-  Open to unauthenticated callers. Rate-limited at the network layer
-  (Phase 15 adds application-layer throttling).
+  Open to unauthenticated callers. Rate-limited at the application
+  layer (10 registrations / minute / IP via the global GraphQL
+  throttle guard).
 
   Returns the new user + their organization. If `organizationSlug`
   was supplied, the user joins that organization. Otherwise the server
@@ -280,12 +292,15 @@ type Mutation {
   """
   Begin the MFA enrollment flow.
 
+  Requires the user's current password (verified server-side — fresh
+  auth), so a stolen bearer token alone cannot enable MFA.
+
   Returns the TOTP secret and ten recovery codes. The secret and
   recovery codes are returned EXACTLY ONCE; they are NOT retrievable
   afterward. The user MUST confirm enrollment by submitting a valid
   TOTP code via `Identity.confirmMfaEnrollment`.
   """
-  enableMfa: MfaEnrollment!
+  enableMfa(input: EnableMfaInput!): MfaEnrollment!
 
   """
   Confirm MFA enrollment with a 6-digit TOTP code from the user's

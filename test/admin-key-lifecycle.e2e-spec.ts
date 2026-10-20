@@ -70,4 +70,44 @@ describe('Admin API key lifecycle (integration)', () => {
       code: 'admin.api_key.not_found',
     });
   });
+
+  it('refuses to revoke the last ACTIVE admin key (409 admin.key.last_active)', async () => {
+    // 2026-10-19 audit (admin LOW): revoking the last active key
+    // locks everyone out of the admin surface. The check counts ALL
+    // alive keys in the table, so we drain every other active key
+    // (loop — parallel suites may issue keys concurrently) until k2
+    // is the only active one, then assert the refusal.
+    const { PrismaClient } = await import('@prisma/client');
+    const prisma = new PrismaClient();
+    await prisma.$connect();
+    try {
+      const k2 = await issueUc.execute({
+        name: `last-active-${Date.now()}`,
+        createdBy: 'ci@cerberus.local',
+        ttlSeconds: 3600,
+      });
+      // Drain all other active keys.
+      for (;;) {
+        const actives = await prisma.adminApiKey.findMany({
+          where: { revokedAt: null, expiresAt: { gt: new Date() } },
+        });
+        const others = actives.filter((k) => k.id !== k2.key.id);
+        if (others.length === 0) break;
+        await revokeUc.execute(others[0].id);
+      }
+
+      // k2 is now the last ACTIVE key — revoking it must 409.
+      await expect(revokeUc.execute(k2.key.id)).rejects.toMatchObject({
+        code: 'admin.key.last_active',
+      });
+
+      // k2 is STILL active (the revoke was refused).
+      const k2Row = await prisma.adminApiKey.findUnique({
+        where: { id: k2.key.id },
+      });
+      expect(k2Row?.revokedAt).toBeNull();
+    } finally {
+      await prisma.$disconnect();
+    }
+  });
 });

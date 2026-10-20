@@ -72,7 +72,12 @@ export class IntrospectTokenUseCase {
     token: string,
   ): Promise<IntrospectTokenResult | null> {
     try {
-      const claims = await this.verifyAccessTokenUc.execute(token);
+      // V1.7 (audit H-3): VerifyAccessTokenUseCase rejects `typ: 'app'`
+      // tokens by default — introspection (RFC 7662) must still report
+      // them, so opt in. App tokens are first-class subjects here.
+      const claims = await this.verifyAccessTokenUc.execute(token, {
+        allowAppTokens: true,
+      });
       // Extract `exp`/`iat` from the JWT payload (the second dot-
       // separated segment). We do this inline because jose's
       // `decodeProtectedHeader` only returns the header.

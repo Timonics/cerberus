@@ -2,8 +2,9 @@
 # Apps GraphQL schema.
 #
 # Apps are third-party integrations that get their own API key + bound
-# organization. They register anonymously in V1 (no JWT required) and
-# receive a plaintext API key exactly once at registration.
+# organization. Registration is open in non-production and requires an
+# admin API key in production (same ProductionAdminGuard as REST);
+# key rotation / revocation require the app's own current credentials.
 #
 # V1.5 mirrors the REST surface at /v1/apps. The GraphQL path uses the
 # same use-cases — RegisterAppUseCase, RotateAppApiKeyUseCase,
@@ -57,9 +58,12 @@ type RotateAppKeyPayload {
 extend type Mutation {
   """
   Register a new app + mint its first API key.
-  
-  Open in V1 (matches the REST /v1/apps surface). V1.5 will require
-  admin auth.
+
+  V1.7 (audits C2/H-1): mirrors the REST `/v1/apps` gate — open in
+  non-production; in production (or whenever
+  `REQUIRE_ADMIN_FOR_REGISTRATION=true`) requires a valid admin API
+  key bearer token, enforced by the same ProductionAdminGuard as the
+  REST endpoint.
   """
   registerApp(input: RegisterAppInput!): RegisterAppPayload!
 
@@ -67,9 +71,21 @@ extend type Mutation {
   Mint a new API key for an existing app. The new key replaces the
   previous one; the old key still works until you call `revokeApp`
   to delete it (V1 limitation — V1.5 will auto-revoke).
+
+  V1.7 (audit C2): requires the app's current credentials — the
+  `X-Cerberus-App-Id` + `X-Cerberus-App-Secret` headers must verify
+  against the app's live key, and the `id` argument must equal the
+  `X-Cerberus-App-Id` header. Unauthenticated key rotation is
+  rejected.
   """
   rotateAppKey(id: ID!, ttlSeconds: Int = 31536000): RotateAppKeyPayload!
 
-  """Soft-revoke the app. Future requests with any of its keys fail."""
+  """
+  Soft-revoke the app. Future requests with any of its keys fail.
+
+  V1.7 (audit C2): same credential requirement as `rotateAppKey` —
+  only the app itself (presenting its current valid key) can revoke
+  itself.
+  """
   revokeApp(id: ID!): Boolean!
 }

@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { ConfigService } from '@nestjs/config';
 import { Logger as PinoLogger } from 'nestjs-pino';
+import type { INestApplication } from '@nestjs/common';
 import { AppConfig } from './config/configuration';
 import { bootstrapPublicApp } from './apps/public-app';
 import { bootstrapAdminApp } from './apps/admin-app';
@@ -29,18 +30,63 @@ import { bootstrapAdminApp } from './apps/admin-app';
  * If either app fails to bind its port, the process exits 1 with a
  * clear error. If EITHER app throws during startup, we tear down
  * the other before exiting.
+ *
+ * Fatal-error policy (audit 2026-10-19): `uncaughtException` and
+ * `unhandledRejection` log via pino (when the logger is up), drain
+ * both apps with a 2s cap, and exit 1. The process is NOT kept alive
+ * after a fatal error — Node/Nest guidance is terminate + restart;
+ * a corrupted auth process must not keep serving.
  */
 async function bootstrap(): Promise<void> {
+  // App refs for the fatal-error path. Populated as soon as each
+  // app boots; either may still be null if we crash mid-startup.
+  let publicApp: INestApplication | null = null;
+  let adminApp: INestApplication | null = null;
+  let pinoLogger: PinoLogger | null = null;
+  let shuttingDown = false;
+
+  const fatal = (kind: string, err: unknown): void => {
+    // Guard against a second fatal arriving mid-shutdown.
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const detail =
+      err instanceof Error ? (err.stack ?? err.message) : String(err);
+    if (pinoLogger) {
+      pinoLogger.error(`[${kind}] ${detail}`);
+    } else {
+      console.error(`[${kind}]`, detail);
+    }
+    const closeWithDrain = async (app: INestApplication): Promise<unknown> => {
+      const close = app.close();
+      // 2s drain cap: never hang the exit on a stuck connection.
+      return await Promise.race([
+        close,
+        new Promise((resolve) =>
+          setTimeout(() => resolve('drain-timeout'), 2_000),
+        ),
+      ]);
+    };
+    Promise.allSettled(
+      [publicApp, adminApp]
+        .filter((a): a is INestApplication => a !== null)
+        .map(closeWithDrain),
+    )
+      .catch(() => undefined)
+      .finally(() => {
+        process.exit(1);
+      });
+  };
+
   process.on('uncaughtException', (err) => {
-    console.error('[uncaughtException]', err);
+    fatal('uncaughtException', err);
   });
   process.on('unhandledRejection', (err) => {
-    console.error('[unhandledRejection]', err);
+    fatal('unhandledRejection', err);
   });
 
   // Boot both apps in parallel. The order matters only for error
   // reporting — neither depends on the other at runtime.
-  const [publicApp, adminApp] = await Promise.all([
+  [publicApp, adminApp] = await Promise.all([
     bootstrapPublicApp(),
     bootstrapAdminApp(),
   ]);
@@ -55,11 +101,11 @@ async function bootstrap(): Promise<void> {
 
   await Promise.all([publicApp.listen(publicPort), adminApp.listen(adminPort)]);
 
-  publicApp
-    .get(PinoLogger)
-    .log(
-      `cerberus public  listening on :${publicPort} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`,
-    );
+  const publicLogger = publicApp.get(PinoLogger);
+  pinoLogger = publicLogger;
+  publicLogger.log(
+    `cerberus public  listening on :${publicPort} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`,
+  );
   adminApp
     .get(PinoLogger)
     .log(

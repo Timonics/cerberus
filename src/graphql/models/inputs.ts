@@ -42,6 +42,16 @@ export interface MfaCodeInput extends AnyInput {
   code: string;
 }
 
+/**
+ * Input for `Identity.enableMfa`. Fresh-auth: the current password
+ * is verified server-side before the enrollment is created, so a
+ * stolen bearer token alone cannot enable MFA (audit MEDIUM, MFA
+ * enrollment fresh-auth).
+ */
+export interface EnableMfaInput extends AnyInput {
+  currentPassword: string;
+}
+
 export interface VerifyMfaInput extends AnyInput {
   code: string;
   /** V1.5 (audit C-4): sessionId of the session to mark MFA-verified. */

@@ -28,13 +28,23 @@ export interface VerifyAppApiKeyResult {
  * Verify an app's credentials (presented as `X-Cerberus-App-Id` +
  * `X-Cerberus-App-Secret` headers on register/login/etc.).
  *
- * Returns null on failure (unknown key, revoked key, expired key,
- * revoked app). Throws `app.revoked` / `app.api_key.expired` /
- * `app.not_found` to disambiguate for the audit log.
+ * Returns null when no secret was presented at all. Every actual
+ * failure mode — unknown app, revoked app, missing / revoked /
+ * expired key, wrong secret — throws the SAME
+ * `app.credentials.invalid` DomainError. V1.7 (audit): the
+ * distinct codes (`app.not_found`, `app.revoked`,
+ * `app.api_key.expired`, ...) were a real oracle — a caller could
+ * probe app UUIDs and learn which exist and their lifecycle
+ * state. The uniform code also matches the client_credentials
+ * grant's intentional ambiguity (RFC 6749 §5.2).
  *
- * V1: scans all keys and verifies each (acceptable for the V1
- * "few apps per deployment" scale). V1.5 will index by a separate
- * lookup-token for O(1) verification.
+ * Ordering matters: the cheap state checks (existence, revoked,
+ * expiry) run BEFORE the argon2 verify, so probing with a
+ * garbage secret against an expired key costs microseconds, not
+ * an argon2id pass.
+ *
+ * V1: looks the app up directly by id from the header (no scan).
+ * V1.5 will index by a separate lookup-token for O(1) verification.
  */
 @Injectable()
 export class VerifyAppApiKeyUseCase {
@@ -54,20 +64,18 @@ export class VerifyAppApiKeyUseCase {
     // Direct lookup by appId — we have it from the header, so no scan.
     return this.txRunner.run<VerifyAppApiKeyResult | null>(async (tx: Tx) => {
       const app = await this.repo.findById(tx, input.appId);
-      if (!app) {
-        throw new DomainError('app.not_found', 'App not found', {
-          appId: input.appId,
-        });
-      }
-      if (app.revokedAt !== null) {
-        throw new DomainError('app.revoked', 'App has been revoked', {
-          appId: input.appId,
-        });
-      }
-      if (!app.currentKey) {
+      const now = this.clock.now();
+      // Cheap checks first (before the argon2 CPU cost), uniform
+      // error for every failure mode (no existence/state oracle).
+      if (
+        !app ||
+        app.revokedAt !== null ||
+        !app.currentKey ||
+        !app.currentKey.isAliveAt(now)
+      ) {
         throw new DomainError(
-          'app.api_key.not_found',
-          'App has no active key',
+          'app.credentials.invalid',
+          'Invalid app credentials',
           { appId: input.appId },
         );
       }
@@ -76,15 +84,11 @@ export class VerifyAppApiKeyUseCase {
         input.plaintextApiKey,
       );
       if (!ok) {
-        throw new DomainError('app.api_key.invalid', 'Invalid app API key', {
-          appId: input.appId,
-        });
-      }
-      if (!app.currentKey.isAliveAt(this.clock.now())) {
-        if (app.currentKey.revokedAt !== null) {
-          throw new DomainError('app.api_key.revoked', 'App key revoked');
-        }
-        throw new DomainError('app.api_key.expired', 'App key expired');
+        throw new DomainError(
+          'app.credentials.invalid',
+          'Invalid app credentials',
+          { appId: input.appId },
+        );
       }
       return {
         appId: app.id,

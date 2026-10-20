@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { AppConfig } from '../../../config/configuration';
 
 /**
@@ -57,25 +57,5 @@ export class Sha256TokenService {
    */
   public generatePlaintext(): string {
     return randomBytes(32).toString('base64url');
-  }
-
-  /**
-   * Used by V1 legacy tokens (plain SHA-256 without a secret) to
-   * check whether a presented plaintext matches a stored legacy hash.
-   *
-   * V1.5 still supports this for the duration of one token TTL
-   * (24 hours for email-verification, 1 hour for password-reset).
-   * After that window, all legacy tokens have expired and this
-   * method can be deleted.
-   *
-   * Why not just remove V1 hashes? Because the DB might have rows
-   * created before this migration ran. Confirming an outstanding
-   * token with a SHA-256 fallback lets users complete their flow
-   * during the migration window without forcing a re-issue.
-   *
-   * @internal visible to legacy support code only
-   */
-  public legacySha256(plaintext: string): string {
-    return createHash('sha256').update(plaintext, 'utf8').digest('hex');
   }
 }
