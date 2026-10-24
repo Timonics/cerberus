@@ -26,6 +26,12 @@ import {
 import { PrismaAppRepository } from './infrastructure/persistence/prisma-app.repository';
 import { APP_REPOSITORY } from './domain/ports/app.repository.port';
 import { AppsController } from './interfaces/http/apps.controller';
+// Registered LOCALLY (not via IdentityModule) to avoid the
+// AppsModule ↔ IdentityModule import cycle — same precedent as the
+// admin-key pieces below. RegisterAppUseCase validates a supplied
+// `defaultOrgSlug` against this repository at app-creation time.
+import { PrismaOrganizationRepository } from '../identity/infrastructure/persistence/prisma-organization.repository';
+import { ORGANIZATION_REPOSITORY } from '../identity/domain/ports/organization.repository.port';
 
 /**
  * Apps bounded context — Nest wiring.
@@ -69,6 +75,14 @@ import { AppsController } from './interfaces/http/apps.controller';
     {
       provide: APP_API_KEY_HASHER,
       useExisting: Argon2AppApiKeyHasher,
+    },
+    // Local registration — see the import comment above. The
+    // repository only needs PrismaService, so instantiating it here
+    // is safe.
+    PrismaOrganizationRepository,
+    {
+      provide: ORGANIZATION_REPOSITORY,
+      useClass: PrismaOrganizationRepository,
     },
 
     // Use-cases

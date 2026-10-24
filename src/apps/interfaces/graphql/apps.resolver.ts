@@ -63,8 +63,9 @@ export class AppsGraphqlResolver {
       contactEmail?: string;
       notes?: string;
       ttlSeconds?: number;
+      idempotencyKey?: string;
     },
-  ): Promise<{ app: any; apiKey: string }> {
+  ): Promise<{ app: any; apiKey: string | null }> {
     // V1.7 (audit H-1): reuse the REST ProductionAdminGuard so the
     // GraphQL path can never drift from the REST gate. The guard
     // only needs the underlying express request; we hand it a
@@ -81,6 +82,7 @@ export class AppsGraphqlResolver {
       contactEmail: input.contactEmail ?? '',
       notes: input.notes ?? undefined,
       ttlSeconds: input.ttlSeconds ?? 31536000,
+      idempotencyKey: input.idempotencyKey ?? undefined,
     });
     return { app: this.toGraphql(app), apiKey: plaintextApiKey };
   }

@@ -85,6 +85,7 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'identity.organization.name_too_long':
       case 'identity.organization.description_too_long':
       case 'app.scope.invalid': // V1.7 (audit H-3): unknown scope at app registration
+      case 'app.idempotency_key.invalid': // idempotency key consumed by a revoked app, or malformed
         return HttpStatus.BAD_REQUEST;
 
       // 401 — unauthenticated / bad credentials

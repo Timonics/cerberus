@@ -32,8 +32,8 @@ import { createFieldCountLimitRule } from './validation/field-count-limit.rule';
  * every operation, mirroring the REST `ThrottleGuard` caps.
  *
  * Query-size cap: `createFieldCountLimitRule` limits each operation
- * to 100 field selections (aliases count individually) to blunt
- * alias-batching DoS.
+ * to 100 field selections (aliases count individually; introspection
+ * meta-fields excluded) to blunt alias-batching DoS.
  *
  * The SDL `typePaths` probe (see `resolveTypePaths`) is what makes
  * the module robust to `build:clean` — without it, wiping `dist/`

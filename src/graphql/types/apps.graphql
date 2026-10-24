@@ -30,7 +30,7 @@ input RegisterAppInput {
   name: String!
   """Optional description."""
   description: String
-  """Slug of the org that joining users will land in."""
+  """Slug of the org that joining users will land in. Must match an existing organization — creation is rejected otherwise."""
   defaultOrgSlug: String
   """Contact email for the operator."""
   contactEmail: String
@@ -38,14 +38,17 @@ input RegisterAppInput {
   notes: String
   """How long the first key lives, in seconds. Defaults to 1 year."""
   ttlSeconds: Int = 31536000
+  """Optional idempotency key. Retrying registration with the same key returns the original app instead of creating a duplicate — with apiKey null, since the plaintext is never re-issued."""
+  idempotencyKey: String
 }
 
 # Returned exactly once at registration. The plaintext API key is
-# NEVER retrievable again — store it immediately.
+# NEVER retrievable again — store it immediately. NULL when this
+# response is an idempotent replay of an earlier call.
 type RegisterAppPayload {
   app: App!
-  """Plaintext API key (43-char base64url). Shown ONLY here."""
-  apiKey: String!
+  """Plaintext API key (43-char base64url). Shown ONLY on the original creation."""
+  apiKey: String
 }
 
 # Returned at key rotation. Same shape, same one-time disclosure.

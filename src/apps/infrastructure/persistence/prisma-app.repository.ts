@@ -26,6 +26,15 @@ export class PrismaAppRepository extends AppRepository {
     return row ? this.toDomain(row) : null;
   }
 
+  public async findByIdempotencyKey(tx: Tx, key: string): Promise<App | null> {
+    const client = tx as PrismaTx;
+    const row = await client.app.findUnique({
+      where: { idempotencyKey: key },
+      include: { apiKeys: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+    return row ? this.toDomain(row) : null;
+  }
+
   public async findActiveByKeyHash(
     tx: Tx,
     keyHash: string,
@@ -61,6 +70,7 @@ export class PrismaAppRepository extends AppRepository {
         revokedAt: app.revokedAt,
         notes: app.notes,
         allowedScopes: app.allowedScopes,
+        idempotencyKey: app.idempotencyKey,
       },
       update: {
         name: app.name,
@@ -106,6 +116,7 @@ export class PrismaAppRepository extends AppRepository {
     revokedAt: Date | null;
     notes: string | null;
     allowedScopes: string | null;
+    idempotencyKey: string | null;
     apiKeys?: Array<{
       id: string;
       appId: string;
@@ -130,6 +141,7 @@ export class PrismaAppRepository extends AppRepository {
       revokedAt: row.revokedAt,
       notes: row.notes,
       allowedScopes: row.allowedScopes ?? '',
+      idempotencyKey: row.idempotencyKey,
       currentKey: liveKey ? this.toKeyDomain(liveKey) : null,
     });
   }
@@ -145,6 +157,7 @@ export class PrismaAppRepository extends AppRepository {
       revokedAt: Date | null;
       notes: string | null;
       allowedScopes: string | null;
+      idempotencyKey: string | null;
       apiKeys: Array<{
         id: string;
         appId: string;
@@ -170,6 +183,7 @@ export class PrismaAppRepository extends AppRepository {
       revokedAt: row.app.revokedAt,
       notes: row.app.notes,
       allowedScopes: row.app.allowedScopes ?? '',
+      idempotencyKey: row.app.idempotencyKey,
       currentKey: liveKey ? this.toKeyDomain(liveKey) : null,
     });
   }

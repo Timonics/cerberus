@@ -21,8 +21,9 @@ export class RegisterAppDto {
   /**
    * Slug of the Organization that users registered through this app
    * will be auto-bound to. Optional — apps without a binding still
-   * work but users fall through to email-domain / personal-org
-   * resolution on register.
+   * work but users fall through to personal-org resolution on
+   * register. When provided, it MUST match an existing organization:
+   * creation is rejected with `domain.invariant_violation` otherwise.
    */
   @IsOptional()
   @IsString()

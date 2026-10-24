@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   HttpStatus,
@@ -12,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ChangePasswordUseCase } from '../../application/use-cases/change-password.use-case';
+import { CreateOwnOrganizationUseCase } from '../../application/use-cases/create-own-organization.use-case';
 import {
   CompleteMfaVerificationUseCase,
   MfaLockedError,
@@ -19,10 +21,12 @@ import {
 import { ConfirmMfaEnrollmentUseCase } from '../../application/use-cases/confirm-mfa-enrollment.use-case';
 import { DisableMfaUseCase } from '../../application/use-cases/disable-mfa.use-case';
 import { EnableMfaUseCase } from '../../application/use-cases/enable-mfa.use-case';
+import { GetUserUseCase } from '../../application/use-cases/get-user.use-case';
 import { RegisterUserUseCase } from '../../application/use-cases/register-user.use-case';
 import { UpdateDisplayNameUseCase } from '../../application/use-cases/update-display-name.use-case';
 import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/verify-app-api-key.use-case';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { CreateOwnOrganizationDto } from './dto/create-own-organization.dto';
 import { EnableMfaDto } from './dto/enable-mfa.dto';
 import { MfaCodeDto } from './dto/mfa-code.dto';
 import { ConfirmMfaDto } from './dto/confirm-mfa.dto';
@@ -46,6 +50,10 @@ import { UserPrincipal } from '../../../authorization/domain/value-objects/user-
  *     Returns 201 with an opaque body whether the user was created or
  *     the email already exists (no account-enumeration oracle).
  *   PATCH /v1/identity/me — JWT + auth:write. Updates display name.
+ *   GET /v1/identity/me — JWT + auth:read. Returns the caller's profile
+ *     (email, displayName, org, role, MFA status).
+ *   POST /v1/identity/orgs — JWT + auth:write. Creates a new org, makes
+ *     the caller OWNER, and moves the caller's account into it.
  *   POST /v1/identity/change-password — JWT + auth:write.
  *   POST /v1/identity/mfa/enable — JWT + auth:write + currentPassword.
  *   POST /v1/identity/mfa/confirm — JWT + auth:write.
@@ -70,6 +78,8 @@ export class IdentityController {
     private readonly disableMfaUc: DisableMfaUseCase,
     private readonly completeMfaVerificationUc: CompleteMfaVerificationUseCase,
     private readonly updateDisplayNameUc: UpdateDisplayNameUseCase,
+    private readonly getUserUc: GetUserUseCase,
+    private readonly createOwnOrganizationUc: CreateOwnOrganizationUseCase,
   ) {}
 
   @Public()
@@ -123,6 +133,47 @@ export class IdentityController {
       ipAddress: ip,
       userAgent: userAgent ?? null,
     });
+  }
+
+  /**
+   * Self-service profile read.
+   */
+  @UseGuards(JwtAuthGuard, ScopesGuard)
+  @Scopes('auth:read')
+  @Get('me')
+  @HttpCode(HttpStatus.OK)
+  public async getMe(@CurrentUser() principal: UserPrincipal) {
+    return this.getUserUc.execute({ userId: principal.userId });
+  }
+
+  /**
+   * Self-service organization creation. The caller becomes OWNER of the
+   * new org and their account moves into it (V1 is single-org-per-user;
+   * they leave their previous org, typically the auto-created personal
+   * one). Colleagues can then register with `organizationSlug=<slug>`.
+   *
+   *   201 → { id, slug, name }
+   *   409 → slug already taken
+   */
+  @UseGuards(JwtAuthGuard, ScopesGuard)
+  @Scopes('auth:write')
+  @Post('orgs')
+  @HttpCode(HttpStatus.CREATED)
+  public async createOwnOrganization(
+    @CurrentUser() principal: UserPrincipal,
+    @Body() body: CreateOwnOrganizationDto,
+  ) {
+    const result = await this.createOwnOrganizationUc.execute({
+      slug: body.slug,
+      name: body.name,
+      description: body.description ?? null,
+      callerUserId: principal.userId,
+    });
+    return {
+      id: result.organization.id.value,
+      slug: result.organization.slug.value,
+      name: result.organization.name,
+    };
   }
 
   /**

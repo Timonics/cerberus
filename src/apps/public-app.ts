@@ -115,9 +115,11 @@ export async function bootstrapPublicApp(): Promise<INestApplication> {
   );
 
   // V1.5 (audit L-5 follow-on): register the GraphQL domain-error
-  // filter so DomainError.code surfaces as `extensions.code` on the
-  // GraphQL response — without this, resolvers' DomainErrors get
-  // wrapped in INTERNAL_SERVER_ERROR and the `domainCode` is lost.
+  // filter globally so DomainError.code surfaces as `extensions.code`
+  // on GraphQL responses — the `filters:` option on GraphQLModule
+  // alone does not reliably run it. The filter itself context-gates:
+  // for non-GraphQL hosts it delegates to the REST DomainErrorFilter
+  // instead of swallowing the response (see graphql-domain-error.filter.ts).
   app.useGlobalFilters(new GraphqlDomainErrorFilter());
 
   // Routes are versioned under /v1. Health, readiness, JWKS, Scalar,

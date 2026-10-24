@@ -67,6 +67,11 @@ export const AUDIT_EVENT_TYPES = [
   'identity.password.reset',
   'identity.registration.duplicate',
   'identity.organization.joined_by_domain',
+  // Self-service org creation: emitted when an authenticated user
+  // founds their own org via POST /v1/identity/orgs (or the GraphQL
+  // `createOwnOrganization` mutation). Distinct from the operator
+  // `admin.organization.created` above.
+  'identity.organization.created_by_user',
 ] as const;
 
 export type AuditEventTypeLiteral = (typeof AUDIT_EVENT_TYPES)[number];

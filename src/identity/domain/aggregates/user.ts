@@ -190,6 +190,33 @@ export class User {
   }
 
   /**
+   * Move the user to a different organization (V1: a user always
+   * belongs to exactly one org). Used by the self-service org-creation
+   * flow: the caller founds a new org and their account moves into it.
+   *
+   * Emits no domain event — the application layer records an audit row
+   * for the move. Note: access tokens minted for the previous org stay
+   * valid until they expire (they are short-lived by design).
+   */
+  public moveToOrganization(clock: Clock, organizationId: OrgId): User {
+    if (this.organizationId.equals(organizationId)) {
+      return this; // idempotent
+    }
+    const now = clock.now();
+    return new User(
+      this.id,
+      organizationId,
+      this.email,
+      this.displayName,
+      this.emailVerifiedAt,
+      this.deletedAt,
+      this.createdAt,
+      now,
+      this.pendingEvents,
+    );
+  }
+
+  /**
    * Mark the user as soft-deleted. Reversible via `restore()`. Used by
    * the GDPR data-deletion flow (V2). The DB row is NOT physically
    * deleted — audit history must outlive the user.

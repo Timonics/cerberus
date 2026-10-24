@@ -28,6 +28,12 @@ export interface RegisterInput extends AnyInput {
   displayName?: string;
 }
 
+export interface CreateOwnOrganizationInput extends AnyInput {
+  slug: string;
+  name: string;
+  description?: string;
+}
+
 export interface ChangePasswordInput extends AnyInput {
   currentPassword: string;
   newPassword: string;

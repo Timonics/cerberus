@@ -59,6 +59,13 @@ export class App {
      * reorder / dedupe on read.
      */
     public readonly allowedScopes: string,
+    /**
+     * Idempotency key presented at registration, when any. Immutable.
+     * A replayed registration with the same key returns THIS app
+     * instead of creating a duplicate (the use-case handles the
+     * replay; the aggregate just carries the key for persistence).
+     */
+    public readonly idempotencyKey: string | null,
   ) {}
 
   public static register(params: {
@@ -73,6 +80,8 @@ export class App {
     initialKey: AppApiKey;
     /** V1.6: comma-separated OAuth2 scopes the app may request. */
     allowedScopes?: string;
+    /** Idempotency key presented at registration, when any. */
+    idempotencyKey?: string | null;
   }): App {
     const now = params.clock.now();
     return new App(
@@ -86,6 +95,7 @@ export class App {
       params.notes?.trim() ?? null,
       params.initialKey,
       params.allowedScopes?.trim() ?? '',
+      params.idempotencyKey?.trim() || null,
     );
   }
 
@@ -100,6 +110,7 @@ export class App {
     notes: string | null;
     currentKey: AppApiKey | null;
     allowedScopes?: string;
+    idempotencyKey?: string | null;
   }): App {
     return new App(
       params.id,
@@ -112,6 +123,7 @@ export class App {
       params.notes,
       params.currentKey,
       params.allowedScopes ?? '',
+      params.idempotencyKey ?? null,
     );
   }
 
@@ -128,6 +140,7 @@ export class App {
       this.notes,
       this.currentKey,
       this.allowedScopes,
+      this.idempotencyKey,
     );
   }
 
@@ -150,6 +163,7 @@ export class App {
       this.notes,
       newKey,
       this.allowedScopes,
+      this.idempotencyKey,
     );
   }
 
@@ -188,6 +202,7 @@ export class App {
       this.notes,
       this.currentKey,
       csv.trim(),
+      this.idempotencyKey,
     );
   }
 }

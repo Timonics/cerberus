@@ -1,9 +1,13 @@
 import { Inject } from '@nestjs/common';
-import { Args, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { Args, Context, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { AuthGuard } from '../../../graphql/guards/auth-guard.decorator';
 import { CurrentUser } from '../../../graphql/graphql-context';
-import { GqlBadRequestException } from '../../../graphql/graphql-errors';
+import {
+  GqlBadRequestException,
+  GqlUnauthenticatedException,
+} from '../../../graphql/graphql-errors';
 import { RegisterUserUseCase } from '../../application/use-cases/register-user.use-case';
+import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/verify-app-api-key.use-case';
 import { ChangePasswordUseCase } from '../../application/use-cases/change-password.use-case';
 import { UpdateDisplayNameUseCase } from '../../application/use-cases/update-display-name.use-case';
 import { EnableMfaUseCase } from '../../application/use-cases/enable-mfa.use-case';
@@ -13,6 +17,7 @@ import { RevokeSessionUseCase } from '../../../authentication/application/use-ca
 import { DisableMfaUseCase } from '../../application/use-cases/disable-mfa.use-case';
 import { VerifySecondFactorUseCase } from '../../application/use-cases/verify-second-factor.use-case';
 import { GetUserUseCase } from '../../application/use-cases/get-user.use-case';
+import { CreateOwnOrganizationUseCase } from '../../application/use-cases/create-own-organization.use-case';
 import {
   RegisterInput,
   ChangePasswordInput,
@@ -20,6 +25,7 @@ import {
   MfaCodeInput,
   VerifyMfaInput,
   EnableMfaInput,
+  CreateOwnOrganizationInput,
 } from '../../../graphql/models/inputs';
 
 /**
@@ -36,6 +42,8 @@ export class IdentityResolver {
   public constructor(
     @Inject(RegisterUserUseCase)
     private readonly registerUserUc: RegisterUserUseCase,
+    @Inject(VerifyAppApiKeyUseCase)
+    private readonly verifyAppApiKeyUc: VerifyAppApiKeyUseCase,
     @Inject(ChangePasswordUseCase)
     private readonly changePasswordUc: ChangePasswordUseCase,
     @Inject(UpdateDisplayNameUseCase)
@@ -47,6 +55,8 @@ export class IdentityResolver {
     @Inject(VerifySecondFactorUseCase)
     private readonly verify2faUc: VerifySecondFactorUseCase,
     @Inject(GetUserUseCase) private readonly getUserUc: GetUserUseCase,
+    @Inject(CreateOwnOrganizationUseCase)
+    private readonly createOwnOrganizationUc: CreateOwnOrganizationUseCase,
     @Inject(ListSessionsUseCase)
     private readonly listSessionsUc: ListSessionsUseCase,
     @Inject(RevokeSessionUseCase)
@@ -123,11 +133,49 @@ export class IdentityResolver {
     description:
       'Register a new user. Open to unauthenticated callers. Auto-creates a personal organization when no slug is supplied and no email-domain matches.',
   })
-  public async register(@Args('input') input: RegisterInput) {
+  public async register(
+    @Args('input') input: RegisterInput,
+    @Context() gqlContext: { req: import('express').Request },
+  ) {
+    // REST/GraphQL parity: the REST controller binds registrations to
+    // an app's default org via the X-Cerberus-App-Id /
+    // X-Cerberus-App-Secret headers and FAILS CLOSED on bad
+    // credentials. This resolver used to silently ignore the headers,
+    // so bad app creds over GraphQL created personal-org users instead
+    // of a 401. Mirror the controller: partial headers → 400-shaped
+    // INPUT_INVALID; any verify failure → UNAUTHENTICATED (the
+    // use-case already maps every failure mode to one uniform code so
+    // app ids can't be enumerated).
+    const headerVal = (v: string | string[] | undefined): string | undefined =>
+      typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    const appId = headerVal(gqlContext.req.headers['x-cerberus-app-id']);
+    const appSecret = headerVal(
+      gqlContext.req.headers['x-cerberus-app-secret'],
+    );
+    if ((appId && !appSecret) || (!appId && appSecret)) {
+      throw new GqlBadRequestException(
+        'X-Cerberus-App-Id and X-Cerberus-App-Secret must be sent together',
+      );
+    }
+
+    let appDefaultOrgSlug: string | null = null;
+    if (appId && appSecret) {
+      try {
+        const verified = await this.verifyAppApiKeyUc.execute({
+          appId,
+          plaintextApiKey: appSecret,
+        });
+        appDefaultOrgSlug = verified?.defaultOrgSlug ?? null;
+      } catch {
+        throw new GqlUnauthenticatedException('App credentials are invalid');
+      }
+    }
+
     const result = await this.registerUserUc.execute({
       email: input.email,
       password: input.password,
       organizationSlug: input.organizationSlug ?? undefined,
+      appDefaultOrgSlug,
       displayName: input.displayName ?? undefined,
     });
     return {
@@ -136,6 +184,28 @@ export class IdentityResolver {
       organizationId: result.organizationId,
       organizationSlug: result.organizationSlug,
       autoCreatedOrg: result.autoCreatedOrg,
+    };
+  }
+
+  @AuthGuard()
+  @Mutation(() => 'CreateOwnOrganizationPayload', {
+    description:
+      'Create a new organization for the authenticated user. The caller becomes OWNER and their account moves into the new org (V1 is single-org-per-user, so they leave their previous org). Colleagues can then register with `organizationSlug` set to the new slug. Fails with a conflict when the slug is already taken.',
+  })
+  public async createOwnOrganization(
+    @CurrentUser() user: { sub: string },
+    @Args('input') input: CreateOwnOrganizationInput,
+  ) {
+    const result = await this.createOwnOrganizationUc.execute({
+      slug: input.slug,
+      name: input.name,
+      description: input.description ?? null,
+      callerUserId: user.sub,
+    });
+    return {
+      id: result.organization.id.value,
+      slug: result.organization.slug.value,
+      name: result.organization.name,
     };
   }
 

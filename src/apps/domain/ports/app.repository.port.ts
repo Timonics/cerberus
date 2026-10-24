@@ -5,6 +5,17 @@ export abstract class AppRepository {
   public abstract findById(tx: Tx, id: string): Promise<App | null>;
 
   /**
+   * Find an app by its registration idempotency key (when the
+   * request carried one). Returns the app in ANY lifecycle state —
+   * the use-case decides whether a replay is allowed (alive →
+   * return it; revoked → reject, the key is consumed).
+   */
+  public abstract findByIdempotencyKey(
+    tx: Tx,
+    key: string,
+  ): Promise<App | null>;
+
+  /**
    * Find an app by the hashed app-key. Returns null if no match, if
    * the matched app is revoked, or if the matched key is revoked /
    * expired. The use-case then asks the aggregate + key to verify

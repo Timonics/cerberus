@@ -128,6 +128,38 @@ type RegisterPayload {
 }
 
 """
+Input to `Identity.createOwnOrganization`. The authenticated user
+founds a new organization and becomes its OWNER; their account moves
+into the new org (V1 is single-org-per-user, so they leave their
+previous org — typically the auto-created personal one).
+"""
+input CreateOwnOrganizationInput {
+  """
+  Lowercase, URL-safe, unique slug (3–80 chars). Colleagues will
+  register with `organizationSlug` set to this value to join.
+  """
+  slug: String!
+
+  """Human-readable organization name (1–120 chars)."""
+  name: String!
+
+  """Optional description (≤ 500 chars)."""
+  description: String
+}
+
+"""Result of `Identity.createOwnOrganization`."""
+type CreateOwnOrganizationPayload {
+  """The new organization's UUID."""
+  id: ID!
+
+  """The organization's unique slug."""
+  slug: String!
+
+  """The organization's display name."""
+  name: String!
+}
+
+"""
 Input for changing the authenticated user's password.
 """
 input ChangePasswordInput {
@@ -267,11 +299,32 @@ type Mutation {
   throttle guard).
 
   Returns the new user + their organization. If `organizationSlug`
-  was supplied, the user joins that organization. Otherwise the server
-  attempts an email-domain lookup and falls back to creating a personal
-  org.
+  was supplied, the user joins that organization. Otherwise, when the
+  request carries valid `X-Cerberus-App-Id` + `X-Cerberus-App-Secret`
+  headers, the user joins that app's default organization; when neither
+  is present the server falls back to creating a personal org.
+
+  The two app-credential headers must be sent together — sending only
+  one is an error, and invalid credentials fail the whole registration
+  with UNAUTHENTICATED (the same fail-closed behavior as the REST
+  register endpoint).
   """
   register(input: RegisterInput!): RegisterPayload!
+
+  """
+  Create a new organization for the authenticated user.
+
+  The caller becomes the org's OWNER and their account moves into it
+  (V1 is single-org-per-user, so they leave their previous org —
+  typically the auto-created personal one). Colleagues can then
+  register with `organizationSlug` set to the new slug to join; the
+  first joiner after the founder gets MEMBER.
+
+  Fails with a conflict when the slug is already taken.
+  """
+  createOwnOrganization(
+    input: CreateOwnOrganizationInput!
+  ): CreateOwnOrganizationPayload!
 
   """
   Change the authenticated user's password.

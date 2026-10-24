@@ -522,6 +522,13 @@ model App {
   revokedAt      DateTime?
   notes          String?    @db.VarChar(500)
 
+  /// Idempotency key presented at registration (`Idempotency-Key`
+  /// header or GraphQL input). Unique when present — a retry with
+  /// the same key returns the ORIGINAL app instead of creating a
+  /// duplicate. The API-key plaintext is never re-returned on a
+  /// replay. NULL = request carried no key (one app per call).
+  idempotencyKey String?    @unique @db.VarChar(128)
+
   /// Back-relation to `AppApiKey` rows owned by this app.
   apiKeys AppApiKey[]
 

@@ -78,6 +78,9 @@ export type DomainErrorCode =
   | 'app.api_key.ttl_non_positive'
   | 'app.api_key.invalid'
   | 'app.organization.not_found'
+  // Registration idempotency: key consumed by a revoked app, or
+  // malformed (over 128 chars). Mapped to 400 by DomainErrorFilter.
+  | 'app.idempotency_key.invalid'
   | 'app.auth.missing'
   | 'app.auth.invalid'
   // V1.7: bad client_id or client_secret on the client_credentials

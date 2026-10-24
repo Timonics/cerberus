@@ -85,7 +85,10 @@ export class AppsController {
   @UseGuards(ProductionAdminGuard)
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  public async register(@Body() body: RegisterAppDto) {
+  public async register(
+    @Body() body: RegisterAppDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
     const { app, plaintextApiKey } = await this.registerAppUc.execute({
       name: body.name,
       description: body.description,
@@ -94,6 +97,7 @@ export class AppsController {
       notes: body.notes,
       ttlSeconds: body.ttlSeconds,
       initialScopes: body.initialScopes,
+      idempotencyKey,
     });
     return {
       app: {
@@ -106,8 +110,12 @@ export class AppsController {
         notes: app.notes,
         allowedScopes: app.allowedScopes,
       },
-      // Plaintext returned ONCE — never retrievable again.
+      // NULL on an idempotent replay (same Idempotency-Key seen
+      // before) — the key plaintext was only returned by the
+      // original 201. `idempotentReplay` lets clients distinguish
+      // "replay" from "key lost".
       apiKey: plaintextApiKey,
+      idempotentReplay: plaintextApiKey === null,
     };
   }
 

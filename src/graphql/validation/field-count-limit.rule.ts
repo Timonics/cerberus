@@ -23,6 +23,14 @@ export const GRAPHQL_MAX_FIELD_COUNT = 100;
  * inside Apollo's existing `validationRules` pipeline — no new
  * dependencies, no resolver involvement (rejected before execution).
  *
+ * Introspection meta-fields (`__schema`, `__type`, `__typename`) are
+ * EXCLUDED from the count, including their whole subtree: they resolve
+ * via graphql-js's built-in introspection (never user resolvers, so no
+ * alias-batching amplification), their size is bounded by the schema
+ * itself, and counting them breaks every standard introspection
+ * client (Postman, GraphiQL, codegen) — the full introspection query
+ * selects ~145 fields.
+ *
  * Fragment spreads are expanded inline per occurrence (with cycle
  * protection), so a fragment invoked 50 times contributes 50 times
  * its field count — exactly the amplification we want to count.
@@ -45,6 +53,9 @@ export function createFieldCountLimitRule(
       let count = 0;
       for (const selection of selections) {
         if (selection.kind === Kind.FIELD) {
+          // Skip introspection meta-fields (and their subtrees) — see
+          // the doc comment above.
+          if (selection.name.value.startsWith('__')) continue;
           count += 1;
           if (selection.selectionSet) {
             count += countSelections(
