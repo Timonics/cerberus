@@ -234,6 +234,9 @@ unavailable).
 input VerifyMfaInput {
   """Either a 6-digit TOTP code OR a 10-character recovery code."""
   code: String!
+
+  """Session to mark MFA-verified — the `sessionId` from the pending `Authentication.login` response."""
+  sessionId: ID!
 }
 
 """
@@ -246,6 +249,19 @@ type VerifyMfaResult {
   match means the user should reset their authenticator device ASAP.
   """
   matched: MfaMatchType!
+
+  """
+  JWT access token minted on success. GraphQL parity with
+  `POST /v1/identity/mfa/verify` — completing MFA here finishes the
+  login in one round-trip, no follow-up `login` call needed.
+  """
+  accessToken: String!
+
+  """
+  Rotated plaintext refresh token for the (now MFA-verified) session.
+  Returned ONLY here; never stored, never re-issued.
+  """
+  refreshToken: String!
 }
 
 """

@@ -7,6 +7,10 @@ import {
   GqlUnauthenticatedException,
 } from '../../../graphql/graphql-errors';
 import { RegisterUserUseCase } from '../../application/use-cases/register-user.use-case';
+import {
+  CompleteMfaVerificationUseCase,
+  MfaLockedError,
+} from '../../application/use-cases/complete-mfa-verification.use-case';
 import { VerifyAppApiKeyUseCase } from '../../../apps/application/use-cases/verify-app-api-key.use-case';
 import { ChangePasswordUseCase } from '../../application/use-cases/change-password.use-case';
 import { UpdateDisplayNameUseCase } from '../../application/use-cases/update-display-name.use-case';
@@ -15,7 +19,6 @@ import { ConfirmMfaEnrollmentUseCase } from '../../application/use-cases/confirm
 import { ListSessionsUseCase } from '../../../authentication/application/use-cases/list-sessions.use-case';
 import { RevokeSessionUseCase } from '../../../authentication/application/use-cases/revoke-session.use-case';
 import { DisableMfaUseCase } from '../../application/use-cases/disable-mfa.use-case';
-import { VerifySecondFactorUseCase } from '../../application/use-cases/verify-second-factor.use-case';
 import { GetUserUseCase } from '../../application/use-cases/get-user.use-case';
 import { CreateOwnOrganizationUseCase } from '../../application/use-cases/create-own-organization.use-case';
 import {
@@ -52,11 +55,11 @@ export class IdentityResolver {
     @Inject(ConfirmMfaEnrollmentUseCase)
     private readonly confirmMfaUc: ConfirmMfaEnrollmentUseCase,
     @Inject(DisableMfaUseCase) private readonly disableMfaUc: DisableMfaUseCase,
-    @Inject(VerifySecondFactorUseCase)
-    private readonly verify2faUc: VerifySecondFactorUseCase,
     @Inject(GetUserUseCase) private readonly getUserUc: GetUserUseCase,
     @Inject(CreateOwnOrganizationUseCase)
     private readonly createOwnOrganizationUc: CreateOwnOrganizationUseCase,
+    @Inject(CompleteMfaVerificationUseCase)
+    private readonly completeMfaVerificationUc: CompleteMfaVerificationUseCase,
     @Inject(ListSessionsUseCase)
     private readonly listSessionsUc: ListSessionsUseCase,
     @Inject(RevokeSessionUseCase)
@@ -312,18 +315,33 @@ export class IdentityResolver {
   @AuthGuard()
   @Mutation(() => 'VerifyMfaResult', {
     description:
-      'Verify a TOTP code or 10-character recovery code. Returns which type matched.',
+      'Verify a TOTP code or 10-character recovery code for a pending MFA login and complete it. Returns the matched type plus the real token pair — GraphQL parity with POST /v1/identity/mfa/verify.',
   })
   public async verifyMfa(
     @CurrentUser() user: { sub: string },
     @Args('input') input: VerifyMfaInput,
   ) {
-    const matched = await this.verify2faUc.execute({
-      userId: user.sub,
-      sessionId: input.sessionId,
-      code: input.code,
-    });
-    return { matched };
+    try {
+      const result = await this.completeMfaVerificationUc.execute({
+        userId: user.sub,
+        sessionId: input.sessionId,
+        code: input.code,
+      });
+      // Map the domain's lowercase discriminator onto the SDL enum
+      // names (no value-mapping in schema-first mode).
+      return {
+        matched: result.matched === 'totp' ? 'TOTP' : 'RECOVERY',
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+      };
+    } catch (err) {
+      if (err instanceof MfaLockedError) {
+        // Mirrors the REST 401 identity.mfa.locked: the caller holds
+        // valid credentials but the (user, session) pair is locked.
+        throw new GqlUnauthenticatedException(err.message);
+      }
+      throw err;
+    }
   }
 
   // ---------------------------------------------------------------------------

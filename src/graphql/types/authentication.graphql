@@ -1,0 +1,137 @@
+# Authentication mutations (GraphQL parity for the REST Authentication
+# context). These mirror `POST /v1/auth/login`, `POST /v1/auth/refresh`
+# and `POST /v1/auth/logout` — same use-cases, same MFA-pending contract,
+# same fail-closed handling of the `X-Cerberus-App-Id` /
+# `X-Cerberus-App-Secret` headers (both must be sent together; invalid
+# credentials fail the whole request with UNAUTHENTICATED).
+#
+# The OAuth2 token endpoint (`POST /v1/oauth/token`, client_credentials
+# grant) intentionally stays REST-only: its form-encoded shape is bound
+# by RFC 6749 and OAuth client libraries expect the REST endpoint.
+#
+# Like the REST endpoints, `login` / `refresh` / `logout` are open to
+# unauthenticated callers (session ESTABLISHMENT); they are rate-limited
+# by the global GraphQL throttle guard plus the in-DB login lockout.
+
+"""
+Input to `Authentication.login`.
+
+When the account has MFA enabled and no valid `mfaCode` is supplied,
+the login returns `mfaRequired: true` with a scoped `mfaToken` — pass
+that to `Identity.verifyMfa` to complete the login and receive the real
+token pair. A valid inline `mfaCode` completes the login in one
+round-trip.
+"""
+input LoginInput {
+  """Email address."""
+  email: String!
+
+  """Password."""
+  password: String!
+
+  """Optional client user-agent string, recorded on the session."""
+  userAgent: String
+
+  """Optional inline 6-digit TOTP code (see type docs above)."""
+  mfaCode: String
+}
+
+"""
+Input to `Authentication.refresh` and `Authentication.logout`.
+Both take the plaintext refresh token; the use-cases validate it.
+"""
+input RefreshTokenInput {
+  refreshToken: String!
+}
+
+"""
+Result of `Authentication.login`.
+
+One of two shapes, discriminated by `mfaRequired`:
+
+  * `mfaRequired: false` — login complete. `accessToken` +
+    `refreshToken` are present; `mfaToken` is null.
+  * `mfaRequired: true` — second factor pending. ONLY `mfaToken` is
+    present (no `accessToken`, no `refreshToken` — handing out a usable
+    refresh token here would let a password-only attacker bypass MFA
+    via refresh). Complete the login with `Identity.verifyMfa`.
+"""
+type LoginPayload {
+  """True when a second factor is required to complete the login."""
+  mfaRequired: Boolean!
+
+  """JWT access token. Null while `mfaRequired` is true."""
+  accessToken: String
+
+  """Plaintext refresh token, returned ONLY at issuance. Null while `mfaRequired` is true."""
+  refreshToken: String
+
+  """Scoped JWT (scope `mfa:verify`) for `Identity.verifyMfa`. Null when `mfaRequired` is false."""
+  mfaToken: String
+
+  """The new session's UUID."""
+  sessionId: ID!
+
+  """The authenticated user's UUID."""
+  userId: ID!
+
+  """Refresh-token family UUID (reuse detection groups by family)."""
+  familyId: ID!
+
+  """ISO 8601 expiry of the refresh token."""
+  expiresAt: String!
+
+  """Access-token lifetime in seconds. Null while `mfaRequired` is true."""
+  expiresIn: Int
+}
+
+"""Result of `Authentication.refresh`. The refresh token is rotated: the previous one is invalidated (with a short idempotent-retry grace window) and MUST be discarded by the client."""
+type RefreshPayload {
+  """The newly rotated plaintext refresh token."""
+  refreshToken: String!
+
+  """Freshly issued JWT access token."""
+  accessToken: String!
+
+  """Session UUID."""
+  sessionId: ID!
+
+  """User UUID."""
+  userId: ID!
+
+  """Refresh-token family UUID."""
+  familyId: ID!
+
+  """ISO 8601 expiry of the new refresh token."""
+  expiresAt: String!
+
+  """Access-token lifetime in seconds."""
+  expiresIn: Int
+}
+
+extend type Mutation {
+  """
+  Authenticate a user and establish a session (GraphQL twin of
+  `POST /v1/auth/login`). Open to unauthenticated callers; throttled
+  per-IP and subject to the in-DB login lockout.
+
+  Honors the `X-Cerberus-App-Id` + `X-Cerberus-App-Secret` headers for
+  app-pinned org scoping, exactly like the REST endpoint.
+  """
+  login(input: LoginInput!): LoginPayload!
+
+  """
+  Rotate a refresh token (GraphQL twin of `POST /v1/auth/refresh`).
+  Returns a new refresh + access token pair. Presenting an old,
+  already-rotated token outside the retry grace window triggers reuse
+  detection and mass-revokes the whole token family.
+  """
+  refresh(input: RefreshTokenInput!): RefreshPayload!
+
+  """
+  Revoke the session bound to a refresh token (GraphQL twin of
+  `POST /v1/auth/logout`). Returns true; the use-case validates the
+  token itself, so no JWT is required.
+  """
+  logout(input: RefreshTokenInput!): Boolean!
+}

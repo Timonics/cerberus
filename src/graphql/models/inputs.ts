@@ -34,6 +34,17 @@ export interface CreateOwnOrganizationInput extends AnyInput {
   description?: string;
 }
 
+export interface LoginInput extends AnyInput {
+  email: string;
+  password: string;
+  userAgent?: string;
+  mfaCode?: string;
+}
+
+export interface RefreshTokenInput extends AnyInput {
+  refreshToken: string;
+}
+
 export interface ChangePasswordInput extends AnyInput {
   currentPassword: string;
   newPassword: string;

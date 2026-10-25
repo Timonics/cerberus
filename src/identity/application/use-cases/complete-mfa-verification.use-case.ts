@@ -32,6 +32,8 @@ export interface CompleteMfaVerificationResult {
   accessToken: string;
   refreshToken: string;
   mfaVerified: true;
+  /** Which code form matched — surfaced by the GraphQL `verifyMfa` twin. */
+  matched: 'totp' | 'recovery';
 }
 
 /** Failure count within the window that triggers a lockout. */
@@ -184,6 +186,7 @@ export class CompleteMfaVerificationUseCase {
       accessToken: issued.accessToken,
       refreshToken: plaintextRefresh,
       mfaVerified: true,
+      matched,
     };
   }
 

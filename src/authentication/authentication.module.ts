@@ -10,6 +10,7 @@ import { LockoutPolicy } from './domain/aggregates/lockout-policy';
 import { LOGIN_ATTEMPT_REPOSITORY } from './domain/ports/login-attempt.repository.port';
 import { SESSION_REPOSITORY } from './domain/ports/session.repository.port';
 import { AuthController } from './interfaces/http/auth.controller';
+import { AuthenticationResolver } from './interfaces/graphql/authentication.resolver';
 import { PrismaSessionRepository } from './infrastructure/persistence/prisma-session.repository';
 import { RedisLoginAttemptRepository } from './infrastructure/persistence/redis-login-attempt.repository';
 import {
@@ -62,6 +63,9 @@ import { TotpService } from '../identity/infrastructure/security/totp.service';
     RevokeSessionUseCase,
 
     PasswordChangedSessionRevoker,
+
+    // GraphQL resolver (login / refresh / logout parity)
+    AuthenticationResolver,
   ],
   exports: [
     LoginUseCase,

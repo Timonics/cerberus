@@ -16,8 +16,11 @@ export class LogMailSender extends MailSender {
   private readonly logger = new Logger(LogMailSender.name);
 
   public send(message: MailMessage): Promise<void> {
+    // Log the FULL body, not a prefix: dev verification/password-reset
+    // links carry their token at the end of the text, so a truncated
+    // prefix hides the one thing a developer needs to copy.
     this.logger.log(
-      `[email] to=${message.to} subject=${JSON.stringify(message.subject)} text=${JSON.stringify(message.text.slice(0, 120))}${message.html ? ' (with html)' : ''}`,
+      `[email] to=${message.to} subject=${JSON.stringify(message.subject)} text=${JSON.stringify(message.text)}${message.html ? ' (with html)' : ''}`,
     );
     return Promise.resolve();
   }
