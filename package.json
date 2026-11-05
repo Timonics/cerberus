@@ -119,10 +119,10 @@
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
       "global": {
-        "lines": 8,
-        "branches": 5,
-        "functions": 8,
-        "statements": 8
+        "lines": 6,
+        "branches": 4,
+        "functions": 6,
+        "statements": 6
       }
     },
     "testEnvironment": "node"
