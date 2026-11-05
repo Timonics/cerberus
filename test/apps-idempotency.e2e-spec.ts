@@ -49,6 +49,7 @@ describe('App registration idempotency (HTTP)', () => {
   });
 
   afterAll(async () => {
+    if (app) await app.close();
     if (module) await module.close();
     await teardown();
   });

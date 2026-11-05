@@ -103,6 +103,13 @@ export type DomainErrorCode =
   // server-side app-scope registry. Mapped to 400 by
   // DomainErrorFilter (`.invalid` suffix).
   | 'app.scope.invalid'
+  // Services (catalog + org entitlements). `not_found` maps to 404,
+  // `.invalid` to 400 by DomainErrorFilter; `already_active` is a 409
+  // conflict (mirrors admin.key.last_active treatment).
+  | 'services.service.not_found'
+  | 'services.entitlement.not_found'
+  | 'services.entitlement.already_active'
+  | 'services.entitlement.revoked'
   // Generic
   | 'domain.invariant_violation'
   | 'domain.illegal_state';

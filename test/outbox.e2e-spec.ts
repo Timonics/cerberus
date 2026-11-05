@@ -120,11 +120,22 @@ describe('Outbox pattern (integration)', () => {
     expect(emailAudit).not.toBeNull();
 
     // 5. No outbox rows are stuck in 'unprocessed' for recent
-    // events (the relay is keeping up).
+    // events (the relay is keeping up). Rows claimed within the
+    // last few seconds are in-flight, not stuck — the claim-based
+    // relay holds them mid-publish, and parallel suites share the
+    // table. A row with no claim (awaiting the next tick) or an
+    // abandoned claim (reclaimed once stale) is also fine; only a
+    // row that is unclaimed AND unprocessed AND old would indicate
+    // the relay fell over, and dead-lettered rows (attempts maxed)
+    // are covered by the relay's own logging.
     const stuckRows = await prisma.outboxEvent.count({
       where: {
         createdAt: { gte: new Date(Date.now() - 30_000) },
         processedAt: null,
+        OR: [
+          { claimedAt: null },
+          { claimedAt: { lt: new Date(Date.now() - 10_000) } },
+        ],
       },
     });
     expect(stuckRows).toBe(0);
@@ -193,6 +204,71 @@ describe('Outbox pattern (integration)', () => {
     expect(audit).not.toBeNull();
 
     // Cleanup the row.
+    await prisma.outboxEvent.delete({ where: { id } });
+  });
+
+  it('relay respects claims from another relay instance (no double-delivery)', async () => {
+    // Regression: two Nest apps (public + admin) each boot their own
+    // OutboxRelay in the same process, both polling outbox_events.
+    // Pre-fix, both relays picked up the same unprocessed rows and
+    // each published them — every registration email went out TWICE
+    // with two different tokens. The fix claims rows atomically
+    // (FOR UPDATE SKIP LOCKED + claimedAt), so a row claimed by
+    // another instance is skipped until the claim goes stale.
+    const id = randomUUID();
+    await prisma.outboxEvent.create({
+      data: {
+        id,
+        eventName: 'engagement.email_verification.requested',
+        aggregateType: 'EmailVerification',
+        payload: {
+          __class: 'EmailVerificationRequested',
+          eventId: id,
+          eventName: 'engagement.email_verification.requested',
+          aggregateType: 'EmailVerification',
+          aggregateId: id,
+          occurredAt: new Date().toISOString(),
+          userId: '00000000-0000-4000-8000-000000000000',
+          verificationId: id,
+          plaintextToken: '',
+        },
+      },
+    });
+
+    // Simulate relay B owning the row: a FRESH claim. Our relay must
+    // NOT pick the row up (it appears claimed-by-another), and must
+    // not steal the fresh claim either.
+    await prisma.outboxEvent.update({
+      where: { id },
+      data: { claimedAt: new Date() },
+    });
+    await relay.tick();
+    const stillPending = await prisma.outboxEvent.findUnique({
+      where: { id },
+    });
+    expect(stillPending?.processedAt).toBeNull();
+    expect(
+      stillPending?.claimedAt &&
+        Date.now() - stillPending.claimedAt.getTime() < 5_000,
+    ).toBeTruthy();
+
+    // Simulate relay B having crashed: a STALE claim. Our relay must
+    // reclaim and process the row.
+    await prisma.outboxEvent.update({
+      where: { id },
+      data: { claimedAt: new Date(Date.now() - 6 * 60_000) },
+    });
+    for (let i = 0; i < 5; i++) {
+      await relay.tick();
+    }
+    let after = await prisma.outboxEvent.findUnique({ where: { id } });
+    for (let i = 0; i < 25 && !after?.processedAt; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      after = await prisma.outboxEvent.findUnique({ where: { id } });
+    }
+    expect(after?.processedAt).not.toBeNull();
+
+    // Cleanup.
     await prisma.outboxEvent.delete({ where: { id } });
   });
 

@@ -136,6 +136,8 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'app.not_found':
       case 'app.organization.not_found':
       case 'identity.organization.not_found': // V1 pinned-org token issuance: caller asked for a tenant that does not exist
+      case 'services.service.not_found':
+      case 'services.entitlement.not_found':
         return HttpStatus.NOT_FOUND;
 
       // 409 — conflict
@@ -144,6 +146,8 @@ export class DomainErrorFilter implements ExceptionFilter {
       case 'identity.organization.slug_taken':
       case 'identity.mfa.already_enabled':
       case 'admin.key.last_active': // refusing to revoke the last active admin key
+      case 'services.entitlement.already_active': // grant already exists
+      case 'services.entitlement.revoked': // illegal state transition on a revoked grant
       case 'domain.invariant_violation':
       case 'domain.illegal_state':
         return HttpStatus.CONFLICT;

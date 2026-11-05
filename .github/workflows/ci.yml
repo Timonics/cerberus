@@ -2,16 +2,23 @@
 #
 # Runs on every push to master and on every pull request.
 #
-# Three stages:
-#   1. install       — npm ci with cache
-#   2. prisma        — generate client, run migrations against a fresh DB
-#   3. build         — TypeScript + copy OpenAPI/SDL artifacts
-#   4. lint          — eslint max-warnings 0
+# Jobs:
+#   ci           — install, build, verify artifacts, lint, apply migrations,
+#                  boot the server and smoke-test public endpoints
+#   test         — unit tests (with coverage gate) + e2e integration suite
+#                  against service-container Postgres + Redis
+#   supply-chain — npm audit (blocks on CRITICAL), license policy check
+#                  (permissive licenses only), CycloneDX SBOM generation
+#                  and artifact upload
 #
-# Tests are NOT yet implemented (the project has no test files at
-# time of writing). When tests are added under `test/`, drop a
-# `npm test` step into the pipeline. The Node version is pinned to
-# the project's `engines.node` field — currently >=20.
+# PRs additionally go through .github/workflows/dependency-review.yml,
+# which blocks dependency changes that introduce critical vulnerabilities
+# or copyleft licenses.
+#
+# Node is pinned to 22 to match the runtime Dockerfile (node:22-alpine)
+# and the Scalar docs dependency, which requires Node 22+. npm is pinned
+# to 10.x — the major version that generated package-lock.json — so
+# `npm ci` resolves the same transitive graph the lock file records.
 
 name: CI
 
@@ -28,10 +35,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # CI uses Node 20 to match the project's `engines.node` field.
-  # Scalar requires Node 22+ locally; we ship Scalar as a warning-tier
-  # dependency and don't enforce Node 22 yet.
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
   # Default ports inside the CI runner (different from local dev so
   # jobs don't collide). Postgres + Redis run as service containers.
   DATABASE_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
@@ -75,18 +79,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # Scalar requires Node 22+ (EBADENGINE warning otherwise);
-          # we run 22 in CI even though the project's `engines.node`
-          # field is `>=20.0.0`. The README's local-dev instructions
-          # recommend Node 20 since Scalar is dev-only — CI runs 22
-          # to validate the full toolchain including the docs UI.
-          node-version: '22'
-          # Pin npm to the same major version that generated
-          # package-lock.json. Without this, the action installs the
-          # latest npm (currently 11.x), which produces a different
-          # transitive resolution than the lock file's npm@10.x
-          # graph — `npm ci` then fails with 'Missing: @emnapi/...'
-          # errors. Re-bump when the lock file is regenerated.
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Install npm 10.x (matches lock file)
@@ -102,10 +95,6 @@ jobs:
       # ------------------------------------------------------------------
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
-        env:
-          # audit blocks on 10 known transitive vulns (axios, graphql,
-          # and others). Skipping until the team triages them.
-          NPM_CONFIG_AUDIT: false
 
       # ------------------------------------------------------------------
       # Validate OpenAPI/GraphQL SDL artifacts. Build emits these via
@@ -157,8 +146,7 @@ jobs:
       # Boot the dual-listener server in the background, hit the
       # Scalar UI, the JWKS endpoint, and the GraphQL endpoint to
       # confirm wiring is healthy. This is a smoke test — the
-      # full smoke suite belongs in `npm test` once test files
-      # exist.
+      # full integration suite runs in the `test` job.
       # ------------------------------------------------------------------
       - name: Boot server (background)
         run: |
@@ -215,28 +203,64 @@ jobs:
             rm -f server.pid
           fi
 
+  # --------------------------------------------------------------------------
+  # Security & compliance: vulnerability audit, license policy, SBOM.
+  # Runs in parallel with build/test on every push and PR.
+  # --------------------------------------------------------------------------
+  supply-chain:
+    name: Security & compliance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install npm 10.x (matches lock file)
+        run: npm install -g npm@10
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
       # ------------------------------------------------------------------
-      # Cache the build output for downstream jobs (release workflow
-      # would consume this — not yet implemented).
+      # Blocks the build if npm audit reports any CRITICAL vulnerability.
+      # High/moderate/low findings do NOT fail here — they are triaged
+      # manually (see docs/deployment.md). Zero criticals is the current
+      # baseline and must never regress.
       # ------------------------------------------------------------------
-      - name: Upload build artifacts
-        if: success()
+      - name: Vulnerability audit (blocks on critical)
+        run: npm audit --audit-level=critical
+
+      # ------------------------------------------------------------------
+      # Production dependencies must carry a permissive license
+      # (MIT/BSD/ISC/Apache-2.0 family). Copyleft licenses (GPL/AGPL/LGPL)
+      # fail the build. The allowlist lives in package.json
+      # (`licenses:check` script).
+      # ------------------------------------------------------------------
+      - name: License policy check
+        run: npm run licenses:check
+
+      # ------------------------------------------------------------------
+      # CycloneDX SBOM of production dependencies (what actually ships).
+      # ------------------------------------------------------------------
+      - name: Generate SBOM (CycloneDX)
+        run: npm run sbom
+
+      - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cerberus-dist
-          path: |
-            dist/main.js
-            dist/openapi.yaml
-            dist/openapi-admin.yaml
-            dist/graphql/types
+          name: cerberus-sbom
+          path: sbom/cerberus-sbom.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   # --------------------------------------------------------------------------
-  # Future: separate `test` job that spins up Postgres + Redis with seeded
-  # migrations and runs integration tests. Currently `npm test` runs the
-  # pure-domain contract suite (jest with *.spec.ts under src/). Add
-  # integration tests under `test/` and split into `test:unit` / `test:e2e`.
+  # Unit tests with coverage gate + full e2e integration suite against
+  # service-container Postgres + Redis.
   # --------------------------------------------------------------------------
   test:
     name: Tests

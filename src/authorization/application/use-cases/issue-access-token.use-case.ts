@@ -28,6 +28,10 @@ import {
   MEMBERSHIP_REPOSITORY,
   MembershipRepository,
 } from '../../../identity/domain/ports/membership.repository.port';
+import {
+  SERVICE_ENTITLEMENT_REPOSITORY,
+  ServiceEntitlementRepository,
+} from '../../../services/domain/ports/service-entitlement.repository.port';
 import { AppConfig } from '../../../config/configuration';
 import { RecordAuditEventUseCase } from '../../../engagement/application/use-cases/record-audit-event.use-case';
 
@@ -64,7 +68,10 @@ export interface IssueAccessTokenResult {
  *   * no membership → auth:read only (defensive)
  *
  * Caller-supplied scopes are intersected with the role's allowed set
- * (OAuth2 scope-downgrade rule).
+ * (OAuth2 scope-downgrade rule). On top of that, every ACTIVE service
+ * entitlement of the membership's organization mints a `service:<slug>`
+ * scope, so resource servers can gate on entitlements without calling
+ * back to Cerberus.
  */
 @Injectable()
 export class IssueAccessTokenUseCase {
@@ -76,6 +83,8 @@ export class IssueAccessTokenUseCase {
     private readonly keyRepo: SigningKeyRepository,
     @Inject(MEMBERSHIP_REPOSITORY)
     private readonly membershipRepo: MembershipRepository,
+    @Inject(SERVICE_ENTITLEMENT_REPOSITORY)
+    private readonly entitlementRepo: ServiceEntitlementRepository,
     @Inject(ORGANIZATION_REPOSITORY)
     private readonly organizationRepo: OrganizationRepository,
     private readonly jwtSigner: JwtSignerService,
@@ -133,7 +142,7 @@ export class IssueAccessTokenUseCase {
           );
         }
       }
-      const scopes = this.scopesFor(membership, input.scopes);
+      const scopes = await this.scopesFor(tx, membership, input.scopes);
 
       const key = await this.keyRepo.getCurrent(tx);
       if (!key.canSign()) {
@@ -187,15 +196,41 @@ export class IssueAccessTokenUseCase {
     };
   }
 
-  private scopesFor(
+  /**
+   * Compute the final scope set: role-based scopes (intersected with any
+   * caller-supplied request per RFC 6749 §3.3) plus entitlement-derived
+   * `service:<slug>` scopes.
+   *
+   * Entitlement scopes are added AFTER the requested∩allowed
+   * intersection — they are grant-driven, not role-driven, so a caller
+   * cannot widen them by asking, nor narrow them by omitting them.
+   * Only ACTIVE entitlements to ACTIVE services mint scopes; the
+   * repository enforces both filters.
+   */
+  private async scopesFor(
+    tx: Tx,
     membership: Membership | null,
     requested: ReadonlyArray<Scope> | undefined,
-  ): ReadonlyArray<Scope> {
+  ): Promise<ReadonlyArray<Scope>> {
     const allowed = this.allowedScopesFor(membership);
-    if (!requested || requested.length === 0) {
-      return allowed;
+    const base =
+      !requested || requested.length === 0
+        ? allowed
+        : requested.filter((s) => allowed.some((a) => a.equals(s)));
+
+    if (!membership) {
+      return base;
     }
-    return requested.filter((s) => allowed.some((a) => a.equals(s)));
+    const entitled = await this.entitlementRepo.findActiveWithServiceByOrgId(
+      tx,
+      membership.organizationId,
+    );
+    const serviceScopes = entitled.map(({ service }) =>
+      Scope.create(`service:${service.slug.value}`),
+    );
+    const seen = new Set(base.map((s) => s.value));
+    const extra = serviceScopes.filter((s) => !seen.has(s.value));
+    return [...base, ...extra];
   }
 
   private allowedScopesFor(

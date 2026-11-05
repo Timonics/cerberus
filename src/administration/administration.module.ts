@@ -4,6 +4,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { IdentityModule } from '../identity/identity.module';
 import { AuthenticationModule } from '../authentication/authentication.module';
 import { EngagementModule } from '../engagement/engagement.module';
+import { ServicesModule } from '../services/services.module';
 import { SharedKernelModule } from '../shared/shared-kernel.module';
 import { RedisModule } from '../redis/redis.module';
 import { ConfigModule } from '@nestjs/config';
@@ -24,6 +25,7 @@ import { PrismaAdminApiKeyRepository } from './infrastructure/persistence/prisma
 import { AdminApiKeyLookupTokenService } from './infrastructure/security/admin-api-key-lookup-token.service';
 import { ADMIN_API_KEY_REPOSITORY } from './domain/ports/admin-api-key.repository.port';
 import { AdminController } from './interfaces/http/admin.controller';
+import { ServicesAdminController } from './interfaces/http/services-admin.controller';
 import { AdminHealthController } from './interfaces/http/admin-health.controller';
 import { AdminApiKeyGuard } from './interfaces/security/admin-api-key.guard';
 import { AdminGraphqlResolver } from './interfaces/graphql/admin.resolver';
@@ -88,8 +90,14 @@ export const ADMIN_IP_ALLOWLIST = Symbol('ADMIN_IP_ALLOWLIST');
     IdentityModule,
     AuthenticationModule,
     EngagementModule,
+    ServicesModule,
   ],
-  controllers: [AdminController, AdminHealthController, OAuthAdminController],
+  controllers: [
+    AdminController,
+    AdminHealthController,
+    OAuthAdminController,
+    ServicesAdminController,
+  ],
   providers: [
     // Infrastructure
     PrismaAdminApiKeyRepository,

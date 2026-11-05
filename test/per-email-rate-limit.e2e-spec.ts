@@ -136,6 +136,7 @@ describe('Per-email rate limit (integration)', () => {
 
   afterAll(async () => {
     if (prisma) await prisma.$disconnect().catch(() => undefined);
+    if (app) await app.close();
     if (module) await module.close();
     delete process.env.RATE_LIMIT_PER_EMAIL_MAX;
   });

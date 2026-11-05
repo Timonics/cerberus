@@ -13,6 +13,7 @@ import { AuthenticationModule } from './authentication/authentication.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { EngagementModule } from './engagement/engagement.module';
 import { AppsModule } from './apps/apps.module';
+import { ServicesModule } from './services/services.module';
 import { GraphqlModule } from './graphql/graphql.module';
 import { AdminModule } from './administration/administration.module';
 import { CleanupModule } from './cleanup/cleanup.module';
@@ -53,6 +54,7 @@ import { DomainErrorFilter } from './shared/interfaces/domain-error.filter';
     EngagementModule,
     AppsModule,
     AdminModule,
+    ServicesModule,
     GraphqlModule,
     CleanupModule,
     HealthModule,

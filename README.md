@@ -451,29 +451,32 @@ npx prisma migrate reset
 
 ### Continuous integration
 
-GitHub Actions runs on every push to `master` and every PR. The workflow at
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs:
+GitHub Actions runs on every push to `master` and every PR. Three workflows:
 
-1. `npm ci` (audit disabled until transitive vulns are addressed)
-2. `npm run build` (TypeScript + copy SDL + copy OpenAPI)
-3. Verify generated artifacts
-4. `npm run lint` (max-warnings 0)
-5. `npx prisma generate`
-6. Wait for Postgres healthcheck
-7. `npx prisma migrate deploy`
-8. Boot `dist/main.js`, hit `/health`, `/.well-known/jwks.json`, `/api-docs`, `/admin/health`, `/admin/docs`
-9. Upload `dist/` as a 7-day artifact
+- **CI** (`.github/workflows/ci.yml`) — three parallel jobs:
+  - `ci`: install, build, verify OpenAPI/SDL artifacts, lint (max-warnings 0),
+    apply migrations against a fresh Postgres, boot `dist/main.js`, and
+    smoke-test `/health`, `/.well-known/jwks.json`, `/api-docs`,
+    `/admin/health`, `/admin/docs`.
+  - `test`: unit tests with the coverage gate, then the full e2e suite against
+    service-container Postgres + Redis.
+  - `supply-chain`: `npm audit` (blocks on CRITICAL), license policy check
+    (permissive licenses only, `npm run licenses:check`), and CycloneDX SBOM
+    generation (`npm run sbom`, uploaded as a 30-day artifact).
+- **Dependency Review** (`.github/workflows/dependency-review.yml`) — PRs only.
+  Blocks PRs that introduce a CRITICAL vulnerability or a copyleft license
+  (GPL/AGPL/LGPL/SSPL/BUSL/Elastic).
 
 ### Deployment
 
-`npm run build` then `node dist/main.js`. Both listeners bind in parallel via
-`Promise.all([bootstrapPublicApp(), bootstrapAdminApp()])`. No orchestration
-needed — it's a single Node process.
+Full guide: [`docs/deployment.md`](docs/deployment.md) (Railway).
 
-For containerized deploys, the docker-compose stack at [`docker-compose.yml`](docker-compose.yml)
-is the reference. In production, run Postgres + Redis as managed services and
-point `DATABASE_URL` / `REDIS_URL` at them. Set `EMAIL_TRANSPORT=smtp` (or
-`sendgrid`) and provide the SMTP_*/SENDGRID_* block.
+Short version: `npm run build` then `node dist/main.js`. Both listeners bind
+in parallel via `Promise.all([bootstrapPublicApp(), bootstrapAdminApp()])` —
+a single Node process. In production, run Postgres + Redis as managed services
+and point `DATABASE_URL` / `REDIS_URL` at them. Set `EMAIL_TRANSPORT=smtp` (or
+`sendgrid`) and provide the SMTP_*/SENDGRID_* block. Run
+`npx prisma migrate deploy` at deploy time, before the process starts.
 
 ### Auditing
 

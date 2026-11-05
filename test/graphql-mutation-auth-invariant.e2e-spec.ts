@@ -77,6 +77,7 @@ describe('GraphQL mutation auth invariant (integration)', () => {
 
   afterAll(async () => {
     if (prisma) await prisma.$disconnect().catch(() => undefined);
+    if (app) await app.close();
     if (module) await module.close();
     await teardown();
   });
@@ -139,7 +140,10 @@ describe('GraphQL mutation auth invariant (integration)', () => {
     ['enableMfa', 'enableMfa(input:{currentPassword:"x"}) { secret }'],
     ['confirmMfaEnrollment', 'confirmMfaEnrollment(input:{code:"000000"})'],
     ['disableMfa', 'disableMfa(input:{code:"000000"})'],
-    ['verifyMfa', 'verifyMfa(input:{code:"000000"}) { matched }'],
+    [
+      'verifyMfa',
+      `verifyMfa(input:{code:"000000", sessionId:"${NIL_ID}"}) { matched }`,
+    ],
     ['revokeSession', `revokeSession(sessionId:"${NIL_ID}")`],
     ['requestEmailVerification', 'requestEmailVerification'],
     [

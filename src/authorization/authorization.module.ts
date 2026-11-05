@@ -36,6 +36,12 @@ import { AuthorizationResolver } from './interfaces/graphql/authorization.resolv
  * at compile time. IdentityModule already imports AppsModule (it's
  * how app credentials work for the `X-Cerberus-App-Id` header), so we
  * declare the same dependency here without creating a cycle.
+ *
+ * `IssueAccessTokenUseCase` also injects `RecordAuditEventUseCase`
+ * (Engagement) and `SERVICE_ENTITLEMENT_REPOSITORY` (Services). Both
+ * come from `@Global()` modules and must NOT be imported here —
+ * Engagement imports this module, so an explicit import would create
+ * a cycle; the global registration resolves the providers instead.
  */
 @Global()
 @Module({

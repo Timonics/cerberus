@@ -1,0 +1,38 @@
+# Dependency Review
+#
+# Runs on every pull request. Compares the PR's dependency graph against
+# the base branch and fails the check if the PR introduces:
+#   - a vulnerability at CRITICAL severity or above, or
+#   - a dependency under a copyleft/proprietary license (GPL, AGPL, LGPL,
+#     SSPL, BUSL, Elastic License).
+#
+# Complements the `supply-chain` job in ci.yml, which audits the full
+# tree on every push. Use `fail-on-severity: high` to tighten the gate
+# once the backlog of high-severity advisories is cleared.
+
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+  pull-requests: write # for the summary comment on the PR
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: critical
+          deny-licenses: >-
+            GPL-2.0, GPL-3.0, AGPL-3.0,
+            LGPL-2.1, LGPL-3.0,
+            SSPL-1.0, BUSL-1.1, Elastic-2.0
+          comment-summary-in-pr: always

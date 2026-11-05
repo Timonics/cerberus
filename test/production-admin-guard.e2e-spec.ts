@@ -90,6 +90,7 @@ describe('ProductionAdminGuard (V1.7)', () => {
 
   afterAll(async () => {
     if (prisma) await prisma.$disconnect().catch(() => undefined);
+    if (app) await app.close();
     if (module) await module.close();
     delete process.env.REQUIRE_ADMIN_FOR_REGISTRATION;
     await teardown();
@@ -199,6 +200,7 @@ describe('ProductionAdminGuard: dev-mode pass-through', () => {
 
   afterAll(async () => {
     if (prisma) await prisma.$disconnect().catch(() => undefined);
+    if (app) await app.close();
     if (module) await module.close();
     await teardown();
   });

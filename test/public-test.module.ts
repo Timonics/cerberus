@@ -13,7 +13,7 @@
  * probe endpoints.
  */
 
-import { Module } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { configuration } from '../src/config/configuration';
@@ -27,11 +27,25 @@ import { AuthenticationModule } from '../src/authentication/authentication.modul
 import { AuthorizationModule } from '../src/authorization/authorization.module';
 import { EngagementModule } from '../src/engagement/engagement.module';
 import { AppsModule } from '../src/apps/apps.module';
+import { ServicesModule } from '../src/services/services.module';
 import { GraphqlModule } from '../src/graphql/graphql.module';
 import { AdminModule } from '../src/administration/administration.module';
 import { CleanupModule } from '../src/cleanup/cleanup.module';
 import { DomainErrorFilter } from '../src/shared/interfaces/domain-error.filter';
 import { GraphqlDomainErrorFilter } from '../src/graphql/graphql-domain-error.filter';
+import { resetRateLimits } from './harness';
+
+/**
+ * Clears the shared Redis rate-limit counters at app boot. HTTP suites
+ * boot their own app but share one Redis (and one per-IP bucket), so
+ * without this, counters leak across parallel/serial suite runs and
+ * unrelated suites trip 429s (see `resetRateLimits` in harness.ts).
+ */
+class RateLimitReset implements OnModuleInit {
+  async onModuleInit(): Promise<void> {
+    await resetRateLimits();
+  }
+}
 
 @Module({
   imports: [
@@ -51,11 +65,13 @@ import { GraphqlDomainErrorFilter } from '../src/graphql/graphql-domain-error.fi
     AuthorizationModule,
     EngagementModule,
     AppsModule,
+    ServicesModule,
     AdminModule,
     GraphqlModule,
     CleanupModule,
   ],
   providers: [
+    RateLimitReset,
     {
       provide: APP_FILTER,
       useClass: DomainErrorFilter,

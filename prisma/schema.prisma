@@ -54,6 +54,7 @@ model Organization {
   domains         OrganizationDomain[]
   invitations     Invitation[]
   sessions        Session[]
+  serviceEntitlements ServiceEntitlement[]
 
   @@map("organizations")
 }
@@ -412,8 +413,77 @@ model AuditLog {
 }
 
 // -----------------------------------------------------------------------------
+// Services — bounded context: Services
+// -----------------------------------------------------------------------------
+
+/// Catalog of product/services this deployment offers (e.g. the internal
+/// services of the platform operator). Services are provisioned by
+/// operators over the admin surface; organizations are granted
+/// entitlements, which surface as `service:<slug>` scopes on the org
+/// members' access tokens. Downstream resource servers verify the scope
+/// claim rather than asking Cerberus per request.
+model Service {
+  id          String   @id @default(uuid())
+  /// URL-safe identifier, unique across the catalog. Lowercase letters,
+  /// digits and hyphens; also the suffix of the OAuth2 scope emitted on
+  /// tokens (`service:<slug>`), so it must match the scope grammar.
+  slug        String   @unique @db.VarChar(56)
+  name        String   @db.VarChar(120)
+  description String?  @db.VarChar(500)
+  /// INACTIVE services keep their rows (entitlement history stays
+  /// auditable) but no longer mint scopes into new tokens.
+  status      ServiceStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entitlements ServiceEntitlement[]
+
+  @@map("services")
+}
+
+/// Grants an Organization access to a Service. One row per (org, service)
+/// pair — re-granting a revoked entitlement reactivates the same row so
+/// the grant history stays on a single aggregate.
+model ServiceEntitlement {
+  id             String   @id @default(uuid())
+  organizationId String
+  serviceId      String
+  status         EntitlementStatus @default(ACTIVE)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  service      Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, serviceId])
+  @@index([serviceId])
+  @@index([organizationId, status])
+  @@map("service_entitlements")
+}
+
+// -----------------------------------------------------------------------------
 // Enums
 // -----------------------------------------------------------------------------
+
+/// Lifecycle of a catalog service. INACTIVE is a soft-off — entitlements
+/// remain but stop minting scopes.
+enum ServiceStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("service_status")
+}
+
+/// Lifecycle of an org's entitlement to a service. SUSPENDED is a
+/// reversible pause (e.g. billing hold); REVOKED is terminal until an
+/// operator explicitly re-grants (reactivates the row).
+enum EntitlementStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+
+  @@map("entitlement_status")
+}
 
 /// Roles available within an organization. ADMIN can manage users in the org;
 /// MEMBER is the default; OWNER is the role granted to the user who created
@@ -599,6 +669,11 @@ model OutboxEvent {
   /// When the relay successfully published the event. NULL = pending.
   /// Indexed for the relay's poll query.
   processedAt DateTime?
+  /// Set when a relay instance picks the row up for publishing
+  /// (SKIP LOCKED claim). NULL = not claimed. A claim older than
+  /// the relay's stale threshold is treated as abandoned (crashed
+  /// relay) and becomes claimable again.
+  claimedAt   DateTime?
   /// How many times the relay tried to publish. Used for backoff +
   /// dead-letter detection. After N attempts the row is flagged.
   attempts    Int      @default(0)
@@ -606,6 +681,7 @@ model OutboxEvent {
   lastError   String?  @db.VarChar(500)
 
   @@index([processedAt, createdAt])
+  @@index([processedAt, claimedAt])
   @@index([eventName])
   @@map("outbox_events")
 }

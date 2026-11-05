@@ -26,6 +26,7 @@ import { IdentityModule } from '../src/identity/identity.module';
 import { AuthenticationModule } from '../src/authentication/authentication.module';
 import { AuthorizationModule } from '../src/authorization/authorization.module';
 import { EngagementModule } from '../src/engagement/engagement.module';
+import { ServicesModule } from '../src/services/services.module';
 import { configuration } from '../src/config/configuration';
 import { envValidationSchema } from '../src/config/env.validation';
 import { PrismaClient } from '@prisma/client';
@@ -95,6 +96,10 @@ export async function buildIntegrationContext(): Promise<TestingModule> {
       AuthenticationModule,
       AuthorizationModule,
       EngagementModule,
+      // Provides ServiceEntitlementRepository, which
+      // IssueAccessTokenUseCase injects (global registration, same as
+      // the production AppModule wiring).
+      ServicesModule,
     ],
   }).compile();
 }

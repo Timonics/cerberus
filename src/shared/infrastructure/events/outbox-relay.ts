@@ -21,24 +21,32 @@ import { rehydrateEvent } from './rehydrate-event';
  * fired in real time.
  *
  * Concurrency model:
- *   - One relay per Nest process. The CI starter has both public
- *     and admin listeners — they share the same `OutboxRelay`
- *     singleton from SharedKernelModule.
- *   - Single-poll loop. If the previous batch is still being
- *     published when the next tick fires, the next tick is skipped
- *     (we don't queue polls). This is fine for V1 — event
- *     volume is low and a missed tick just delays by 1s.
+ *   - MULTIPLE relay instances may poll the same outbox_events
+ *     table (the public and admin Nest apps each boot their own
+ *     relay in the same process; horizontally scaled deployments
+ *     add more). Rows are claimed atomically with
+ *     `FOR UPDATE SKIP LOCKED` inside a short transaction, so two
+ *     relays can never pick up the same row. A row claimed but not
+ *     processed within CLAIM_STALE_MS (relay crashed mid-tick) is
+ *     treated as abandoned and becomes claimable again.
+ *   - Single-poll loop per instance. If the previous batch is
+ *     still being published when the next tick fires, the next
+ *     tick is skipped (we don't queue polls). This is fine for V1 —
+ *     event volume is low and a missed tick just delays by 1s.
  *   - The relay marks `processedAt` only after the in-process
- *     publish completes. A crash between publish and mark causes
- *     a re-publish on the next boot — subscribers must be
+ *     publish completes. A crash between publish and mark leaves
+ *     the claim to go stale, after which the row is re-published
+ *     by some relay — subscribers must be
  *     idempotent (MailSenderDispatcher logs "skipped because
  *     user not found" if the email no longer exists; the
  *     audit-log handler dedupes on `eventName + eventId`).
+ *     Delivery is therefore at-least-once.
  *
  * Failure model:
  *   - If the bus publish throws (e.g. unknown eventName from
  *     an outdated subscriber registry), the relay increments
- *     `attempts` and stores `lastError`. After
+ *     `attempts`, stores `lastError`, and releases the claim so
+ *     the next tick retries. After
  *     `MAX_ATTEMPTS_BEFORE_DEAD` failures, the row stays
  *     unprocessed and an operator must intervene.
  *   - Network/DB errors are logged and the row stays unprocessed
@@ -66,11 +74,28 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
   // failure is recorded.
   private inFlightTick: Promise<void> | null = null;
 
+  /**
+   * Set by onModuleDestroy. The `.finally()` re-arm in scheduleNextTick
+   * MUST check this: an in-flight tick that resolves after
+   * onModuleDestroy cleared the timer would otherwise re-arm the loop
+   * forever, ticking against a disconnected Prisma client.
+   */
+  private stopped = false;
+
   /** Polling interval. 1s gives a sub-second worst-case latency. */
   private static readonly POLL_INTERVAL_MS = 1_000;
 
   /** Cap on rows published per tick to keep the loop bounded. */
   private static readonly BATCH_SIZE = 50;
+
+  /**
+   * A claimed-but-unprocessed row older than this is treated as
+   * abandoned (the relay instance crashed mid-tick) and becomes
+   * claimable again. Generous on purpose: publishing a batch takes
+   * milliseconds, and onModuleDestroy bounds shutdown at 5s, so 5
+   * minutes of silence means the claim owner is genuinely gone.
+   */
+  private static readonly CLAIM_STALE_MS = 5 * 60_000;
 
   public constructor(
     @Inject(EVENT_BUS) private readonly bus: EventBus,
@@ -83,6 +108,7 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
   }
 
   public async onModuleDestroy(): Promise<void> {
+    this.stopped = true;
     if (this.pollHandle) {
       clearTimeout(this.pollHandle);
       this.pollHandle = null;
@@ -111,8 +137,12 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
           // Re-arm regardless of success. We DO NOT check
           // `this.running` here — it's set back to false in the
           // tick() finally block, and the previous (buggy) check
-          // meant the relay only fired once.
-          this.scheduleNextTick();
+          // meant the relay only fired once. We DO check `stopped`
+          // so a tick resolving after onModuleDestroy doesn't
+          // resurrect the loop against a torn-down Prisma client.
+          if (!this.stopped) {
+            this.scheduleNextTick();
+          }
         });
     }, OutboxRelay.POLL_INTERVAL_MS);
     // Don't keep the Node process alive just for the relay —
@@ -150,11 +180,7 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
       eventName: string;
     }>;
     try {
-      rows = await client.outboxEvent.findMany({
-        where: { processedAt: null },
-        orderBy: { createdAt: 'asc' },
-        take: OutboxRelay.BATCH_SIZE,
-      });
+      rows = await this.claimBatch(client);
     } catch (err) {
       // V1.7: Prisma engine may be in the middle of disconnecting
       // (e.g. jest teardown of a sibling test's Nest app on a
@@ -174,17 +200,13 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
         // so it shows up in Sentry/stdout but doesn't kill the
         // test runner.
         this.logger.warn(
-          `OutboxRelay poll failed (will retry next tick): ${message}`,
+          `OutboxRelay claim failed (will retry next tick): ${message}`,
         );
       }
       return;
     }
 
     for (const row of rows) {
-      if (row.attempts >= OUTBOX_MAX_ATTEMPTS_BEFORE_DEAD) {
-        // Parked — operator must reset `attempts` to retry.
-        continue;
-      }
       try {
         const event = rehydrateEvent(
           row.payload as Parameters<typeof rehydrateEvent>[0],
@@ -197,8 +219,8 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
       } catch (err) {
         // V1.7: same as the rows-from-db block — silently skip
         // if Prisma is mid-disconnect during test teardown. The
-        // row stays unprocessed; the next tick (or operator
-        // reset of `attempts`) retries it.
+        // row stays claimed; the claim goes stale eventually and
+        // the row is retried.
         const message = err instanceof Error ? err.message : String(err);
         if (
           /Engine is not (yet )?connected|Engine has been closed/i.test(message)
@@ -214,14 +236,75 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
             data: {
               attempts: row.attempts + 1,
               lastError: message.slice(0, 500),
+              // Release the claim so the next tick retries the row
+              // immediately instead of waiting for the stale window.
+              claimedAt: null,
             },
           });
         } catch {
           // The update itself can fail if Prisma is mid-disconnect.
-          // The row stays with its old `attempts` count; the next
-          // tick (if Prisma recovers) retries.
+          // The row keeps its claim; it goes stale eventually and
+          // is retried then.
         }
       }
     }
+  }
+
+  /**
+   * Atomically claim the next batch of publishable rows.
+   *
+   * `FOR UPDATE SKIP LOCKED` inside a short transaction is the
+   * standard outbox-relay coordination primitive: two relay
+   * instances polling the same table (the public + admin apps in
+   * one process, or multiple replicas) each lock the rows they
+   * will publish, and rows locked by another instance are skipped
+   * rather than waited on. The claim is stamped with `claimedAt`
+   * so a crashed relay's rows become claimable again once stale.
+   *
+   * Dead-lettered rows (`attempts` at the max) are excluded from
+   * claiming and stay parked for operator review.
+   */
+  private async claimBatch(client: PrismaClient): Promise<
+    Array<{
+      id: string;
+      payload: unknown;
+      attempts: number;
+      eventName: string;
+    }>
+  > {
+    const now = this.clock.now();
+    const staleBefore = new Date(now.getTime() - OutboxRelay.CLAIM_STALE_MS);
+    return client.$transaction(
+      async (tx) => {
+        const rows = await tx.$queryRaw<
+          Array<{
+            id: string;
+            payload: unknown;
+            attempts: number;
+            eventName: string;
+          }>
+        >`
+          SELECT "id", "payload", "attempts", "eventName"
+          FROM "outbox_events"
+          WHERE "processedAt" IS NULL
+            AND "attempts" < ${OUTBOX_MAX_ATTEMPTS_BEFORE_DEAD}
+            AND ("claimedAt" IS NULL OR "claimedAt" < ${staleBefore})
+          ORDER BY "createdAt" ASC
+          LIMIT ${OutboxRelay.BATCH_SIZE}
+          FOR UPDATE SKIP LOCKED
+        `;
+        if (rows.length === 0) {
+          return rows;
+        }
+        await tx.outboxEvent.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data: { claimedAt: now },
+        });
+        return rows;
+      },
+      // The claim tx touches 50 rows max — a few ms. The cap just
+      // keeps a wedged database from pinning the relay forever.
+      { timeout: 5_000 },
+    );
   }
 }

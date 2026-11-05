@@ -126,10 +126,17 @@ describe('H-10 — audit-log dedup on outbox re-publish (integration)', () => {
 
     // 3. Simulate the crash window: the event was published but the
     //    processedAt mark didn't land — the relay re-publishes on a
-    //    later tick. Poll until the relay picks OUR row back up.
+    //    later tick. The claim-based relay only reclaims a row whose
+    //    claim has gone stale (CLAIM_STALE_MS), so backdate claimedAt
+    //    alongside the processedAt reset — a real crash leaves the
+    //    dead owner's claim behind. Poll until the relay picks OUR
+    //    row back up.
     await prisma.outboxEvent.update({
       where: { id: row!.id },
-      data: { processedAt: null },
+      data: {
+        processedAt: null,
+        claimedAt: new Date(Date.now() - 6 * 60_000),
+      },
     });
     let reprocessed: Awaited<ReturnType<typeof prisma.outboxEvent.findUnique>> =
       null;

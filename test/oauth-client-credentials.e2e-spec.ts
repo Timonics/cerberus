@@ -66,6 +66,7 @@ describe('OAuth2 client_credentials grant (integration)', () => {
 
   afterAll(async () => {
     if (prisma) await prisma.$disconnect().catch(() => undefined);
+    if (app) await app.close();
     if (module) await module.close();
     await teardown();
   });
