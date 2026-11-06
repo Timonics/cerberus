@@ -33,6 +33,17 @@ describe('Admin API key lifecycle (integration)', () => {
   });
 
   it('issues a key + revokes it idempotently', async () => {
+    // The revoke guard refuses to revoke the LAST active admin key
+    // (`admin.key.last_active`), so a test that issues exactly one
+    // key and revokes it depends on leftover keys from other suites
+    // — an ordering accident. Keep a sibling key alive so the guard
+    // sees two actives; it expires via its TTL.
+    const sibling = await issueUc.execute({
+      name: 'ci-test-sibling',
+      createdBy: 'ci@cerberus.local',
+      ttlSeconds: 3600,
+    });
+
     // 1. Issue.
     const issued = await issueUc.execute({
       name: 'ci-test-key',
@@ -44,11 +55,13 @@ describe('Admin API key lifecycle (integration)', () => {
     expect(issued.key.role.value).toBe('ADMIN');
     expect(issued.key.revokedAt).toBeNull();
 
-    // 2. First revoke — succeeds.
+    // 2. First revoke — succeeds (sibling keeps the guard happy).
     await revokeUc.execute(issued.key.id);
 
     // 3. Second revoke — idempotent (no throw, just no-op).
     await revokeUc.execute(issued.key.id);
+
+    void sibling;
   });
 
   it('rejects invalid ttlSeconds', async () => {
