@@ -9,6 +9,7 @@
   },
   "transformIgnorePatterns": [],
   "testTimeout": 30000,
+  "globalSetup": "<rootDir>/global-setup.ts",
   "moduleNameMapper": {
     "^@/(.*)$": "<rootDir>/../src/$1"
   }
