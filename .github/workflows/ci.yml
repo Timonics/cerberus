@@ -120,6 +120,10 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
+      # schema.prisma declares directUrl = env("DIRECT_URL") (Supabase
+      # pattern) — prisma migrate deploy requires it even though CI's
+      # Postgres has no pooler; point it at the same direct connection.
+      DIRECT_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
       REDIS_URL: 'redis://localhost:6379'
       NODE_ENV: 'test'
       JWT_ISSUER: cerberus-ci

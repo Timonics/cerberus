@@ -12,12 +12,41 @@ Cerberus runs as a single Node process with two HTTP listeners (public
 | Service        | Railway plugin          | Notes                                                            |
 | -------------- | ----------------------- | ---------------------------------------------------------------- |
 | `cerberus`     | GitHub repo (this one)  | Node 22 runtime, builds and starts from the repo                 |
-| `postgres`     | PostgreSQL plugin       | Railway injects `DATABASE_URL`                                   |
 | `redis`        | Redis (Valkey) plugin     | Railway injects `REDIS_URL`                                      |
 | (optional) SMTP | any SMTP provider        | Use `EMAIL_TRANSPORT=smtp` or `sendgrid`; no Railway plugin needed |
 
-Reference the Postgres/Redis variables from the app service (`${{Postgres.DATABASE_URL}}`,
-`${{Redis.REDIS_URL}}`) or set them manually.
+Postgres can be either the Railway PostgreSQL plugin (`${{Postgres.DATABASE_URL}}`)
+or an external provider such as Supabase — see the next section.
+
+### Postgres via Supabase
+
+`schema.prisma` uses the Supabase pattern — pooled runtime connection plus a
+direct migration connection:
+
+```prisma
+datasource db {
+  url       = env("DATABASE_URL")  // Supabase pooler (PgBouncer), port 6543
+  directUrl = env("DIRECT_URL")    // Supabase direct connection, port 5432
+}
+```
+
+Set BOTH as plain variables on the cerberus service (Supabase is external to
+Railway, so no `${{...}}` reference — paste the strings):
+
+- **`DATABASE_URL`** — the **Connection Pooling** string from Supabase
+  (Project Settings → Database; host `...pooler.supabase.com`, port 6543)
+  with `?sslmode=require&pgbouncer=true` appended. `pgbouncer=true` stops
+  Prisma using prepared statements, which PgBouncer's transaction pooling
+  breaks.
+- **`DIRECT_URL`** — the **direct** connection string (port 5432).
+  `prisma migrate deploy` uses it automatically. Schema validation fails
+  (P1012) if either variable is missing — which is what blocks first-deploy
+  migrations until both are set.
+
+Caveats: queries now cross the public internet — pick a Supabase region
+close to Railway (`us-west1`) when you can; it's fine for an auth service's
+query patterns. The pooler also handles connection limits so the app's pool
+never exhausts Supabase.
 
 ## 2. Build & start commands
 
