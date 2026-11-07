@@ -119,22 +119,25 @@ describe('Outbox pattern (integration)', () => {
     }
     expect(emailAudit).not.toBeNull();
 
-    // 5. No outbox rows are stuck in 'unprocessed' for recent
-    // events (the relay is keeping up). Rows claimed within the
-    // last few seconds are in-flight, not stuck — the claim-based
-    // relay holds them mid-publish, and parallel suites share the
-    // table. A row with no claim (awaiting the next tick) or an
-    // abandoned claim (reclaimed once stale) is also fine; only a
-    // row that is unclaimed AND unprocessed AND old would indicate
-    // the relay fell over, and dead-lettered rows (attempts maxed)
-    // are covered by the relay's own logging.
+    // 5. No outbox rows for OUR user are stuck unprocessed — the
+    //    relay kept up with this registration's events. Scoped to
+    //    this test's rows on purpose: the table is shared with every
+    //    parallel suite, and a sibling's in-flight, claimed, or
+    //    dead-lettered row is not evidence that OUR chain broke.
+    //    In-flight rows (freshly claimed) and rows awaiting the next
+    //    tick are fine; a row that is unclaimed, unprocessed, and old
+    //    means the relay dropped our event.
     const stuckRows = await prisma.outboxEvent.count({
       where: {
-        createdAt: { gte: new Date(Date.now() - 30_000) },
-        processedAt: null,
-        OR: [
-          { claimedAt: null },
-          { claimedAt: { lt: new Date(Date.now() - 10_000) } },
+        AND: [
+          { payload: { path: ['userId'], equals: userId } },
+          { processedAt: null },
+          {
+            OR: [
+              { claimedAt: null },
+              { claimedAt: { lt: new Date(Date.now() - 10_000) } },
+            ],
+          },
         ],
       },
     });

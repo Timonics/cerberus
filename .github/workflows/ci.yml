@@ -126,6 +126,10 @@ jobs:
       JWT_AUDIENCE_DEFAULT: cerberus-ci
       PORT: '3000'
       ADMIN_PORT: '3001'
+      # The admin IP allowlist has no default (fail-closed) — mirror
+      # the local .env so allowlist-dependent suites can simulate
+      # both sides of the boundary via X-Forwarded-For.
+      ADMIN_IP_ALLOWLIST: '127.0.0.1/32,::1/128'
     steps:
       - uses: actions/checkout@v4
 

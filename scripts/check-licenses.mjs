@@ -41,6 +41,10 @@ const ALLOWED = new Set([
 // exception, which is intended for our own private packages).
 const EXCEPTIONS = new Map([
   ['cerberus', 'this repo — private, license field intentionally UNLICENSED'],
+  [
+    'thirty-two',
+    'otplib base32 dep — no license file or field in the published package; npm registry + license-checker report MIT (fuzzy). Acceptable while it stays a transitive dep of otplib; revisit on upgrade.',
+  ],
 ]);
 
 // SPDX expression keywords that are not license ids.
