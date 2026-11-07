@@ -451,21 +451,29 @@ npx prisma migrate reset
 
 ### Continuous integration
 
-GitHub Actions runs on every push to `master` and every PR. Three workflows:
+GitHub Actions (`.github/workflows/ci.yml`) runs a gated DAG on every push
+to `master` and every PR:
 
-- **CI** (`.github/workflows/ci.yml`) — three parallel jobs:
-  - `ci`: install, build, verify OpenAPI/SDL artifacts, lint (max-warnings 0),
-    apply migrations against a fresh Postgres, boot `dist/main.js`, and
-    smoke-test `/health`, `/.well-known/jwks.json`, `/api-docs`,
-    `/admin/health`, `/admin/docs`.
-  - `test`: unit tests with the coverage gate, then the full e2e suite against
-    service-container Postgres + Redis.
-  - `supply-chain`: `npm audit` (blocks on CRITICAL), license policy check
-    (permissive licenses only, `npm run licenses:check`), and CycloneDX SBOM
-    generation (`npm run sbom`, uploaded as a 30-day artifact).
-- **Dependency Review** (`.github/workflows/dependency-review.yml`) — PRs only.
-  Blocks PRs that introduce a CRITICAL vulnerability or a copyleft license
-  (GPL/AGPL/LGPL/SSPL/BUSL/Elastic).
+- **verify** — prettier check, ESLint (max-warnings 0), unit tests, build,
+  generated-artifact check.
+- **integration** *(needs verify)* — migrations against a fresh Postgres,
+  server-boot smoke test, then the full e2e suite against service-container
+  Postgres + Redis. The e2e setup seeds a signing key on fresh databases
+  (`test/global-setup.ts`) and shares one Prisma client per worker to avoid
+  engine churn.
+- **security** *(needs verify)* — `npm audit` (blocks on CRITICAL) and a
+  Trivy filesystem scan (lockfile, config, secrets).
+- **sbom** *(needs verify)* — CycloneDX SBOM via syft (30-day artifact),
+  license gate (`scripts/check-licenses.mjs`, permissive licenses only),
+  and a Trivy scan of the SBOM itself against OSV/NVD.
+- **docker** *(needs integration + security + sbom)* — image build + Trivy
+  image scan. No push: Railway deploys from the repo.
+- **dependency review** *(PRs only)* — blocks PRs introducing CRITICAL
+  vulnerabilities or copyleft licenses, with a summary comment.
+
+Severity policy is CRITICAL-only across the security gates until the
+high-severity dependency backlog (NestJS / Prisma / nodemailer upgrades,
+triaged in `docs/deployment.md`) is cleared; tighten to HIGH after that.
 
 ### Deployment
 

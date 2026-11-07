@@ -70,22 +70,24 @@ in order of preference:
 
 ## 4. Release pipeline (GitHub Actions)
 
-Two workflows gate every push to `master` and every PR:
+A gated DAG (`.github/workflows/ci.yml`) runs on every push to `master` and
+every PR:
 
-- **CI** (`.github/workflows/ci.yml`) — three parallel jobs:
-  - `ci`: install, build, verify OpenAPI/SDL artifacts, lint
-    (max-warnings 0), apply migrations against a fresh Postgres, boot the
-    server, smoke-test public + admin endpoints.
-  - `test`: unit tests with the coverage gate, then the full e2e suite
-    against service-container Postgres + Redis.
-  - `supply-chain`: **npm audit** (fails on any CRITICAL vulnerability),
-    **license policy check** (production deps must use permissive licenses
-    — the allowlist is the `licenses:check` script in `package.json`),
-    and **SBOM generation** (CycloneDX, production dependencies only).
-    The SBOM is uploaded as a 30-day workflow artifact (`cerberus-sbom`).
-- **Dependency Review** (`.github/workflows/dependency-review.yml`) — PRs
-  only. Fails if the PR introduces a CRITICAL vulnerability or a copyleft
-  license (GPL/AGPL/LGPL/SSPL/BUSL/Elastic), and posts a summary comment.
+- **verify** — prettier check, ESLint, unit tests, build, artifact check.
+- **integration** *(needs verify)* — migrations, server-boot smoke test,
+  full e2e suite against service-container Postgres + Redis.
+- **security** *(needs verify)* — `npm audit --audit-level=critical` and a
+  Trivy filesystem scan (lockfile, config, secrets), CRITICAL-gated.
+- **sbom** *(needs verify)* — CycloneDX SBOM via syft (uploaded as a 30-day
+  artifact), license gate (`scripts/check-licenses.mjs`), Trivy SBOM scan
+  against OSV/NVD.
+- **docker** *(needs integration + security + sbom)* — image build + Trivy
+  image scan. **No push** — Railway deploys from the repo, so the image
+  exists purely to prove the Dockerfile produces a clean runtime. (Flip
+  `push:` on and add GHCR login + `packages: write` if a registry path is
+  ever needed.)
+- **dependency review** *(PRs only)* — blocks dependency changes introducing
+  CRITICAL vulnerabilities or copyleft licenses.
 
 Railway's GitHub integration deploys from `master` after these checks pass —
 enable "wait for CI" in the Railway service settings (Deployments → Build
@@ -96,9 +98,9 @@ settings → check runs) so a red pipeline never reaches production.
 Baseline at time of writing: **0 critical**, 10 high, 23 moderate, 5 low.
 Criticals block the pipeline, full stop. High/moderate findings are triaged
 manually; several are dev-only (jest/typescript-eslint chain) and do not
-ship. To tighten the gate later, change `--audit-level=critical` to
-`high` in `ci.yml` and `fail-on-severity: high` in
-`dependency-review.yml` once the backlog is cleared.
+ship. Every security gate in `ci.yml` is CRITICAL-only — tighten them all
+to HIGH (and `fail-on-severity: high` in the dependency-review job) once
+the high-severity backlog is cleared.
 
 ## 5. Post-deploy verification
 

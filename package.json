@@ -18,6 +18,7 @@
     "lint": "eslint \"{src,test}/**/*.ts\" --max-warnings 0",
     "lint:fix": "eslint \"{src,test}/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage --coverageReporters=text --coverageReporters=text-summary",
@@ -28,7 +29,6 @@
     "prisma:studio": "prisma studio",
     "licenses:check": "license-checker-rseidelsohn --production --excludePackages cerberus@0.1.0 --onlyAllow \"MIT;MIT*;MIT-0;BSD-2-Clause;BSD-3-Clause;ISC;Apache-2.0;0BSD;BlueOak-1.0.0;(MIT AND BSD-3-Clause);(MIT OR CC0-1.0)\"",
     "licenses:report": "license-checker-rseidelsohn --production --excludePackages cerberus@0.1.0 --json > licenses.json",
-    "sbom": "cdxgen --required-only -o sbom/cerberus-sbom.json",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
     "infra:logs": "docker compose logs -f",
@@ -69,7 +69,6 @@
     "rxjs": "^7.8.1"
   },
   "devDependencies": {
-    "@cyclonedx/cdxgen": "^12.9.0",
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",

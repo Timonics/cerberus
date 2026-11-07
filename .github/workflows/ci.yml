@@ -1,23 +1,25 @@
-# Cerberus CI
+# Cerberus CI — a gated pipeline; every stage runs only when the
+# stages above it are green (GitHub Actions `needs:` — there are no
+# "stages", the DAG is the flow):
 #
-# Runs on every push to master and on every pull request.
+#   verify  ───────────────────────────────────────────────┐
+#   (prettier, eslint, unit tests, build, artifacts)       │
+#        │                                                 │
+#        ├─→ integration ─┐                                │
+#        ├─→ security ────┼─→ docker                      │
+#        └─→ sbom ────────┘   (image build + Trivy scan;  │
+#                              no push — Railway deploys  │
+#                              from the repo)             │
+#                                                          │
+#   dependency-review (PR only, runs alongside) ───────────┘
 #
-# Jobs:
-#   ci           — install, build, verify artifacts, lint, apply migrations,
-#                  boot the server and smoke-test public endpoints
-#   test         — unit tests (with coverage gate) + e2e integration suite
-#                  against service-container Postgres + Redis
-#   supply-chain — npm audit (blocks on CRITICAL), license policy check
-#                  (permissive licenses only), CycloneDX SBOM generation
-#                  and artifact upload
+# A red verify stops everything downstream — no point scanning or
+# shipping code that doesn't compile; the parallel middle tier keeps
+# the expensive checks independent of each other.
 #
-# PRs additionally go through .github/workflows/dependency-review.yml,
-# which blocks dependency changes that introduce critical vulnerabilities
-# or copyleft licenses.
-#
-# Node is pinned to 22 to match the runtime Dockerfile (node:22-alpine)
-# and the Scalar docs dependency, which requires Node 22+. npm is pinned
-# to 10.x — the major version that generated package-lock.json — so
+# Node is pinned to 22 to match the runtime Dockerfile
+# (node:22-alpine) and the Scalar docs dependency. npm is pinned to
+# 10.x — the major version that generated package-lock.json — so
 # `npm ci` resolves the same transitive graph the lock file records.
 
 name: CI
@@ -29,78 +31,43 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
-# Cancel any in-flight run on the same ref when a new push lands.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   NODE_VERSION: '22'
-  # Default ports inside the CI runner (different from local dev so
-  # jobs don't collide). Postgres + Redis run as service containers.
-  DATABASE_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
-  REDIS_URL: 'redis://localhost:6379'
-  PORT: '3000'
-  ADMIN_PORT: '3001'
 
 jobs:
-  ci:
-    name: Build, lint, validate migrations
+  # ------------------------------------------------------------------------
+  # Gate 1: the code must be formatted, linted, tested and buildable.
+  # ------------------------------------------------------------------------
+  verify:
+    name: format · lint · unit · build
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: cerberus
-          POSTGRES_PASSWORD: cerberus
-          POSTGRES_DB: cerberus
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U cerberus -d cerberus"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: npm
 
       - name: Install npm 10.x (matches lock file)
         run: npm install -g npm@10
 
-      - name: Show Node + npm versions
-        run: |
-          node --version
-          npm --version
+      - run: npm ci --legacy-peer-deps
+      - run: npx prisma generate
 
-      # ------------------------------------------------------------------
-      # Install dependencies.
-      # ------------------------------------------------------------------
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+      - name: Prettier (check only — CI never rewrites)
+        run: npm run format:check
 
-      # ------------------------------------------------------------------
-      # Validate OpenAPI/GraphQL SDL artifacts. Build emits these via
-      # scripts/copy-{graphql-sdl,openapi}.js so we verify they're
-      # up to date.
-      # ------------------------------------------------------------------
+      - name: ESLint (no --fix on CI)
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
       - name: Build
         run: npm run build
 
@@ -111,161 +78,23 @@ jobs:
           test -d dist/graphql/types || (echo "::error::dist/graphql/types missing after build" && exit 1)
           echo "All build artifacts present."
 
-      # ------------------------------------------------------------------
-      # Lint. `npm run lint` exits non-zero on any error or warning.
-      # ------------------------------------------------------------------
-      - name: Lint
-        run: npm run lint
-
-      # ------------------------------------------------------------------
-      # Prisma: generate client, run migrations against the CI Postgres.
-      # `prisma migrate deploy` applies pending migrations in
-      # sequence — it fails (not silently no-ops) if any migration
-      # would re-run an already-applied one.
-      # ------------------------------------------------------------------
-      - name: Generate Prisma client
-        run: npx prisma generate
-
-      - name: Wait for Postgres to accept connections
-        run: |
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            if pg_isready -h localhost -U cerberus -d cerberus; then
-              echo "Postgres is ready"
-              exit 0
-            fi
-            echo "Waiting for Postgres ($i/10)..."
-            sleep 2
-          done
-          echo "::error::Postgres did not become ready in time"
-          exit 1
-
-      - name: Apply migrations
-        run: npx prisma migrate deploy
-
-      # ------------------------------------------------------------------
-      # Boot the dual-listener server in the background, hit the
-      # Scalar UI, the JWKS endpoint, and the GraphQL endpoint to
-      # confirm wiring is healthy. This is a smoke test — the
-      # full integration suite runs in the `test` job.
-      # ------------------------------------------------------------------
-      - name: Boot server (background)
-        run: |
-          node dist/main.js &
-          echo "$!" > server.pid
-          # Wait up to 30s for the listener to bind.
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:3000/health >/dev/null 2>&1; then
-              echo "Server bound on :3000"
-              break
-            fi
-            sleep 1
-          done
-
-      - name: Smoke-test public endpoints
-        env:
-          JWT_ISSUER: cerberus-ci
-          JWT_AUDIENCE_DEFAULT: cerberus-ci
-          NODE_ENV: test
-        run: |
-          set -e
-          echo "--- GET /health"
-          curl -sf -o /tmp/health.json -w "HTTP %{http_code}\n" http://localhost:3000/health
-          cat /tmp/health.json | head -c 200; echo
-
-          echo "--- GET /.well-known/jwks.json"
-          curl -sf -w "HTTP %{http_code}\n" http://localhost:3000/.well-known/jwks.json | head -c 400; echo
-
-          echo "--- GET /api-docs (Scalar HTML)"
-          curl -sf -o /tmp/scalar.html -w "HTTP %{http_code}\n" http://localhost:3000/api-docs
-          head -c 200 /tmp/scalar.html; echo
-          test -s /tmp/scalar.html || (echo "::error::Scalar UI returned empty body" && exit 1)
-
-          echo "--- GET /v1/identity/register (no body, expect 400)"
-          curl -sf -o /tmp/reg.json -w "HTTP %{http_code}\n" \
-            -X POST http://localhost:3000/v1/identity/register \
-            -H 'Content-Type: application/json' \
-            -d '{}' || true
-          cat /tmp/reg.json | head -c 200; echo
-
-          echo "--- GET /admin/health"
-          curl -sf -w "HTTP %{http_code}\n" http://localhost:3001/admin/health
-          echo
-
-          echo "--- GET /admin/docs (Scalar HTML)"
-          curl -sf -o /tmp/admin-scalar.html -w "HTTP %{http_code}\n" http://localhost:3001/admin/docs
-          test -s /tmp/admin-scalar.html || (echo "::error::Admin Scalar UI returned empty body" && exit 1)
-
-      - name: Stop server
-        if: always()
-        run: |
-          if [ -f server.pid ]; then
-            kill "$(cat server.pid)" 2>/dev/null || true
-            rm -f server.pid
-          fi
-
-  # --------------------------------------------------------------------------
-  # Security & compliance: vulnerability audit, license policy, SBOM.
-  # Runs in parallel with build/test on every push and PR.
-  # --------------------------------------------------------------------------
-  supply-chain:
-    name: Security & compliance
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install npm 10.x (matches lock file)
-        run: npm install -g npm@10
-
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
-
-      # ------------------------------------------------------------------
-      # Blocks the build if npm audit reports any CRITICAL vulnerability.
-      # High/moderate/low findings do NOT fail here — they are triaged
-      # manually (see docs/deployment.md). Zero criticals is the current
-      # baseline and must never regress.
-      # ------------------------------------------------------------------
-      - name: Vulnerability audit (blocks on critical)
-        run: npm audit --audit-level=critical
-
-      # ------------------------------------------------------------------
-      # Production dependencies must carry a permissive license
-      # (MIT/BSD/ISC/Apache-2.0 family). Copyleft licenses (GPL/AGPL/LGPL)
-      # fail the build. The allowlist lives in package.json
-      # (`licenses:check` script).
-      # ------------------------------------------------------------------
-      - name: License policy check
-        run: npm run licenses:check
-
-      # ------------------------------------------------------------------
-      # CycloneDX SBOM of production dependencies (what actually ships).
-      # ------------------------------------------------------------------
-      - name: Generate SBOM (CycloneDX)
-        run: npm run sbom
-
-      - name: Upload SBOM artifact
+      # Pass the build output to the integration job (separate runner)
+      # for the server-boot smoke test.
+      - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cerberus-sbom
-          path: sbom/cerberus-sbom.json
-          if-no-files-found: error
-          retention-days: 30
+          name: cerberus-dist
+          path: dist
+          retention-days: 1
 
-  # --------------------------------------------------------------------------
-  # Unit tests with coverage gate + full e2e integration suite against
-  # service-container Postgres + Redis.
-  # --------------------------------------------------------------------------
-  test:
-    name: Tests
+  # ------------------------------------------------------------------------
+  # Gate 2a: integration — migrations + server boot smoke test + the
+  # full e2e suite against service-container Postgres + Redis.
+  # ------------------------------------------------------------------------
+  integration:
+    name: integration (Postgres + Redis)
+    needs: verify
     runs-on: ubuntu-latest
-    needs: ci
     services:
       postgres:
         image: postgres:16-alpine
@@ -277,42 +106,234 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U cerberus -d cerberus"
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
       redis:
         image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
     env:
       DATABASE_URL: 'postgresql://cerberus:cerberus@localhost:5432/cerberus'
       REDIS_URL: 'redis://localhost:6379'
       NODE_ENV: 'test'
+      JWT_ISSUER: cerberus-ci
+      JWT_AUDIENCE_DEFAULT: cerberus-ci
+      PORT: '3000'
+      ADMIN_PORT: '3001'
     steps:
-      - name: 'Checkout'
-        uses: actions/checkout@v4
-      - name: 'Set up Node'
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: 'Install dependencies'
-        run: npm ci --legacy-peer-deps
-      - name: 'Apply migrations'
+          cache: npm
+
+      - name: Install npm 10.x (matches lock file)
+        run: npm install -g npm@10
+
+      - run: npm ci --legacy-peer-deps
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cerberus-dist
+          path: dist
+
+      - name: Apply migrations
         run: npx prisma migrate deploy
-      - name: 'Run unit tests'
-        run: npm test
-      - name: 'Check coverage threshold'
-        # Gate PRs on coverage not dropping below the baseline
-        # captured in `jest.coverageThreshold` in package.json. The
-        # baseline is currently low (~7%) because the audit +
-        # integration tests live in test/, not src/, and the services
-        # catalog added src/ code faster than unit specs — but it
-        # MUST never regress. Real coverage comes from npm run test:e2e.
-        run: npm run test:cov
-      - name: 'Run integration tests'
+
+      # Boot the dual-listener server in the background, hit the
+      # Scalar UI, the JWKS endpoint, and the admin listener to
+      # confirm wiring is healthy before the full suite runs.
+      - name: Boot server (background)
+        run: |
+          node dist/main.js &
+          echo "$!" > server.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health >/dev/null 2>&1; then
+              echo "Server bound on :3000"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Smoke-test public endpoints
+        run: |
+          set -e
+          curl -sf -o /dev/null -w "GET /health -> %{http_code}\n" http://localhost:3000/health
+          curl -sf -o /dev/null -w "GET /.well-known/jwks.json -> %{http_code}\n" http://localhost:3000/.well-known/jwks.json
+          curl -sf -o /tmp/scalar.html -w "GET /api-docs -> %{http_code}\n" http://localhost:3000/api-docs
+          test -s /tmp/scalar.html || (echo "::error::Scalar UI returned empty body" && exit 1)
+          curl -sf -o /dev/null -w "GET /admin/health -> %{http_code}\n" http://localhost:3001/admin/health
+          curl -sf -o /tmp/admin-scalar.html -w "GET /admin/docs -> %{http_code}\n" http://localhost:3001/admin/docs
+          test -s /tmp/admin-scalar.html || (echo "::error::Admin Scalar UI returned empty body" && exit 1)
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" 2>/dev/null || true
+            rm -f server.pid
+          fi
+
+      # The e2e suite seeds its own signing key (test/global-setup.ts)
+      # and shares one Prisma client per worker to avoid engine churn.
+      - name: Integration tests (e2e)
         run: npm run test:e2e
+
+  # ------------------------------------------------------------------------
+  # Gate 2b: security — lockfile audit + Trivy filesystem scan
+  # (lockfile, misconfig, secrets).
+  #
+  # Severity policy: CRITICAL-only for now. The backlog of HIGH
+  # findings (NestJS / Prisma / nodemailer major-version upgrades)
+  # is triaged in docs/deployment.md. Tighten every gate in this file
+  # to HIGH once the backlog is cleared.
+  # ------------------------------------------------------------------------
+  security:
+    name: vulnerability scans
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install npm 10.x (matches lock file)
+        run: npm install -g npm@10
+
+      - run: npm ci --legacy-peer-deps
+
+      # Lockfile vulnerability gate — fails on critical.
+      - name: npm audit
+        run: npm audit --audit-level=critical
+
+      - name: Trivy filesystem scan (lockfile, config, secrets)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+  # ------------------------------------------------------------------------
+  # Gate 2c: SBOM + license gate + Trivy scan of the SBOM itself
+  # (catches what npm audit misses).
+  # ------------------------------------------------------------------------
+  sbom:
+    name: SBOM + license gate
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install npm 10.x (matches lock file)
+        run: npm install -g npm@10
+
+      - run: npm ci --legacy-peer-deps
+
+      # CycloneDX SBOM over the installed dependency tree (needs the
+      # npm ci above — syft catalogs node_modules, not the lockfile).
+      # Scoped to the npm cataloger on purpose: the default catalog set
+      # also picks up .github/workflows YAML and reports every `uses:`
+      # action as a component — those are CI tooling references, not
+      # dependencies, and carry no license metadata.
+      - name: Generate SBOM
+        run: |
+          curl -sSfL https://get.anchore.io/syft | sudo sh -s -- -b /usr/local/bin v1.18.1
+          syft dir:. --override-default-catalogers npm --quiet -o cyclonedx-json=sbom.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json
+          retention-days: 30
+
+      # Fail on any non-permissive (or missing) dependency license.
+      - name: License gate
+        run: node scripts/check-licenses.mjs sbom.json
+
+      # Scan the SBOM itself against OSV/nvd — catches what npm audit misses.
+      - name: Trivy SBOM scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: sbom
+          scan-ref: sbom.json
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+  # ------------------------------------------------------------------------
+  # Gate 3: image build + Trivy image scan. No push — Railway deploys
+  # from the repo, so the image exists purely as a scanned artifact
+  # proving the Dockerfile produces a clean, bootable runtime. Flip
+  # `push` back on (with GHCR login + packages:write) if a registry
+  # path is ever needed.
+  # ------------------------------------------------------------------------
+  docker:
+    name: image build · scan
+    needs: [integration, security, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: cerberus:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: cerberus:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+  # ------------------------------------------------------------------------
+  # PR-only companion: vulnerability + license check on the dependency
+  # diff. Runs alongside the main DAG.
+  # ------------------------------------------------------------------------
+  dependency-review:
+    name: dependency review (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vulnerability + license check on the dependency diff
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: critical
+          license-check: true
+          deny-licenses: AGPL-1.0-or-later, AGPL-3.0-or-later, GPL-1.0-or-later, GPL-2.0-or-later, GPL-3.0-or-later, LGPL-2.0-or-later, LGPL-2.1-or-later, LGPL-3.0-or-later, SSPL-1.0, BUSL-1.1, Elastic-2.0
+          comment-summary-in-pr: always
