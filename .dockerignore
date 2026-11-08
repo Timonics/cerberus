@@ -1,0 +1,17 @@
+# Build context hygiene — the build stage runs `COPY . .` and must
+# never receive host artifacts (a Windows node_modules copied over
+# the Linux deps layer breaks native binaries like Prisma engines
+# and argon2).
+
+node_modules
+dist
+coverage
+.git
+.github
+sbom
+*.log
+.env
+.env.*
+!.env.example
+docs/audits
+docker/postgres-init
