@@ -23,7 +23,7 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nestjs -u 1001
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# The start command runs `prisma migrate deploy`, so the Prisma CLI
+# The image entrypoint runs `prisma migrate deploy`, so the Prisma CLI
 # must exist in the runtime image even though it's a devDependency.
 # Install it standalone (no-save) at the version pinned in
 # package.json — this keeps the two in sync automatically. Dropping
@@ -37,8 +37,13 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/node_modules/@prisma ./node_modules/@prisma
 
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 USER nestjs
 EXPOSE 3000
 
-# Use exec-form so Node receives SIGTERM directly and shutdown hooks can run.
+# Entrypoint applies migrations, then exec's this CMD — so Node receives
+# SIGTERM directly and the shutdown hooks in src/main.ts can run.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["node", "dist/main.js"]

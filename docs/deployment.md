@@ -43,19 +43,21 @@ need PgBouncer pooling, reintroduce `directUrl = env("DIRECT_URL")` in
 
 ## 2. Build & start commands
 
-Railway's Nixpacks builder detects Node automatically. To be explicit, set:
+The service deploys from the repo `Dockerfile` (node:22-alpine,
+multi-stage). No build command is needed — the image compiles the app
+itself. **Leave the start command EMPTY**: the image's entrypoint
+(`docker/entrypoint.sh`, baked into the runtime stage) runs
+`prisma migrate deploy` and then `exec node dist/main.js`.
 
-- **Build command:** `npm ci --legacy-peer-deps && npx prisma generate && npm run build`
-- **Start command:** `npx prisma migrate deploy && node dist/main.js`
+Do NOT set a custom start command such as
+`npx prisma migrate deploy && node dist/main.js` — Railway replaces the
+image's CMD with it while ENTRYPOINT stays in place, and the entrypoint
+would then try (and fail) to exec that string as a binary.
 
-The `prisma migrate deploy` in the start command applies pending migrations
-on every deploy before the server binds — it is idempotent and fails loudly
-rather than skipping. Remove it from start and run migrations manually if you
-prefer deploy-time control (`railway run npx prisma migrate deploy`).
-
-The repo contains a `Dockerfile` (node:22-alpine, multi-stage) — you can
-switch the service to Dockerfile deploys later; both paths produce the same
-runtime.
+The entrypoint's migrate step applies pending migrations on every
+deploy before the server binds — it is idempotent and fails loudly
+rather than skipping. To run migrations manually instead, use
+`railway run npx prisma migrate deploy`.
 
 ## 3. Required environment variables
 

@@ -4,3 +4,7 @@ src/prisma/ops.json linguist-generated
 src/prisma/migration.json linguist-generated
 migrations/snapshots/**/contract.json linguist-generated
 migrations/snapshots/**/contract.d.ts linguist-generated
+
+# Shell entrypoints must keep LF line endings — a CRLF shebang breaks
+# /bin/sh inside the Linux container when checked out on Windows.
+*.sh text eol=lf
