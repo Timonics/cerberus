@@ -20,33 +20,26 @@ or an external provider such as Supabase — see the next section.
 
 ### Postgres via Supabase
 
-`schema.prisma` uses the Supabase pattern — pooled runtime connection plus a
-direct migration connection:
+`schema.prisma` declares a single connection — `url = env("DATABASE_URL")`,
+no `directUrl`. Prisma uses it for both runtime queries and
+`prisma migrate deploy`, so it must be a connection migrations can run on.
 
-```prisma
-datasource db {
-  url       = env("DATABASE_URL")  // Supabase pooler (PgBouncer), port 6543
-  directUrl = env("DIRECT_URL")    // Supabase direct connection, port 5432
-}
-```
+Set it as a plain variable on the cerberus service (Supabase is external to
+Railway, so no `${{...}}` reference — paste the string):
 
-Set BOTH as plain variables on the cerberus service (Supabase is external to
-Railway, so no `${{...}}` reference — paste the strings):
+- **`DATABASE_URL`** — the **direct** connection string from Supabase
+  (Project Settings → Database; port 5432) with `?sslmode=require` appended.
+  Do NOT use the Connection Pooling string (port 6543, PgBouncer) here —
+  Prisma Migrate cannot run through transaction pooling, and the start
+  command's `migrate deploy` would fail on every deploy.
 
-- **`DATABASE_URL`** — the **Connection Pooling** string from Supabase
-  (Project Settings → Database; host `...pooler.supabase.com`, port 6543)
-  with `?sslmode=require&pgbouncer=true` appended. `pgbouncer=true` stops
-  Prisma using prepared statements, which PgBouncer's transaction pooling
-  breaks.
-- **`DIRECT_URL`** — the **direct** connection string (port 5432).
-  `prisma migrate deploy` uses it automatically. Schema validation fails
-  (P1012) if either variable is missing — which is what blocks first-deploy
-  migrations until both are set.
-
-Caveats: queries now cross the public internet — pick a Supabase region
-close to Railway (`us-west1`) when you can; it's fine for an auth service's
-query patterns. The pooler also handles connection limits so the app's pool
-never exhausts Supabase.
+Caveats: without a pooler, the app's connection pool talks straight to
+Supabase, so its connection limits bound your deploy's concurrency — keep
+the pool modest. Queries also cross the public internet; pick a Supabase
+region close to Railway (`us-west1`) when you can. It's fine for an auth
+service's query patterns. If you later outgrow the direct connection and
+need PgBouncer pooling, reintroduce `directUrl = env("DIRECT_URL")` in
+`schema.prisma` and set the two strings separately again.
 
 ## 2. Build & start commands
 
